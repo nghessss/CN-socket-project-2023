@@ -63,12 +63,11 @@ def handle_client(tcpCliSock):
                           margin-top: 50px;
                           text-align: center;
                         }
-                        
                         a {
                           color: #2aa7cc;
                           text-decoration: none;
                         }
-                        
+
                         a:hover {
                           color: white;
                         }
