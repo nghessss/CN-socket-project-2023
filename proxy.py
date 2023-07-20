@@ -30,6 +30,58 @@ def read_config_file(filename):
 def is_whitelisted(host):
     return any(host.endswith(allowed_host) for allowed_host in whitelist)
 
+def response403():
+    response = b"HTTP/1.0 403 Forbidden\r\nContent-Type: text/html\r\n\r\n"
+    response += b"<!DOCTYPE html>\n<html lang='en'>\n<head>\n<meta charset='UTF-8'>\n<meta name='viewport' content='width=device-width, initial-scale=1.0'>\n<title>403 Error</title>\n<style>\n"
+    # Append the custom CSS styles here
+    response += b"""body {
+                        background: #1b1b1b;
+                        color: white;
+                        font-family: "Bungee", cursive;
+                        margin-top: 50px;
+                        text-align: center;
+                    }
+                    a {
+                        color: #2aa7cc;
+                        text-decoration: none;
+                    }
+
+                    a:hover {
+                        color: white;
+                    }
+                    
+                    svg {
+                        width: 50vw;
+                    }
+                    
+                    .lightblue {
+                        fill: #444;
+                    }
+                    
+                    .eye {
+                        cx: calc(115px + 30px * var(--mouse-x));
+                        cy: calc(50px + 30px * var(--mouse-y));
+                    }
+                    
+                    #eye-wrap {
+                        overflow: hidden;
+                    }
+                    
+                    .error-text {
+                        font-size: 120px;
+                    }
+                    
+                    .alarm {
+                        animation: alarmOn 0.5s infinite;
+                    }
+                    
+                    @keyframes alarmOn {
+                        to {
+                        fill: darkred;
+                        }
+                    }</style>\n</head>\n<body>\n<svg xmlns='http://www.w3.org/2000/svg' id='robot-error' viewBox='0 0 260 118.9' role='img'>\n<title xml:lang='en'>403 Error</title>\n<defs>\n<clipPath id='white-clip'>\n<circle id='white-eye' fill='#cacaca' cx='130' cy='65' r='20' />\n</clipPath>\n<text id='text-s' class='error-text' y='106'> 403 </text>\n</defs>\n<path class='alarm' fill='#e62326' d='M120.9 19.6V9.1c0-5 4.1-9.1 9.1-9.1h0c5 0 9.1 4.1 9.1 9.1v10.6' />\n<use xlink:href='#text-s' x='-0.5px' y='-1px' fill='black'></use>\n<use xlink:href='#text-s' fill='#2b2b2b'></use>\n<g id='robot'>\n<g id='eye-wrap'>\n<use xlink:href='#white-eye'></use>\n<circle id='eyef' class='eye' clip-path='url(#white-clip)' fill='#000' stroke='#2aa7cc' stroke-width='2' stroke-miterlimit='10' cx='130' cy='65' r='11' />\n<ellipse id='white-eye' fill='#2b2b2b' cx='130' cy='40' rx='18' ry='12' />\n</g>\n<circle class='lightblue' cx='105' cy='32' r='2.5' id='tornillo' />\n<use xlink:href='#tornillo' x='50'></use>\n<use xlink:href='#tornillo' x='50' y='60'></use>\n<use xlink:href='#tornillo' y='60'></use>\n</g>\n</svg>\n<h1>You are not allowed to enter here</h1>\n<script>\nvar root = document.documentElement;\nvar eyef = document.getElementById('eyef');\nvar cx = document.getElementById('eyef').getAttribute('cx');\nvar cy = document.getElementById('eyef').getAttribute('cy');\ndocument.addEventListener('mousemove', evt => {\nlet x = evt.clientX / innerWidth;\nlet y = evt.clientY / innerHeight;\nroot.style.setProperty('--mouse-x', x);\nroot.style.setProperty('--mouse-y', y);\ncx = 115 + 30 * x;\ncy = 50 + 30 * y;\neyef.setAttribute('cx', cx);\neyef.setAttribute('cy', cy);\n});\ndocument.addEventListener('touchmove', touchHandler => {\nlet x = touchHandler.touches[0].clientX / innerWidth;\nlet y = touchHandler.touches[0].clientY / innerHeight;\nroot.style.setProperty('--mouse-x', x);\nroot.style.setProperty('--mouse-y', y);\n});\n</script>\n</body>\n</html>\n"""
+    # End of custom CSS styles
+    response += b"</body></html>"
 # Function to handle concurrent client connections
 def handle_client(tcpCliSock):
     # Receive the HTTP request from the client
@@ -47,63 +99,8 @@ def handle_client(tcpCliSock):
     # Check if the requested website is whitelisted
     host = filename.split("/")[0]
     if not is_whitelisted(host):
-        # Return 403 Forbidden with custom HTML content
-        # response = b"HTTP/1.0 403 Forbidden\r\nContent-Type: text/html\r\n\r\n"
-        # response += b"<html><body><h1>403 Forbidden</h1>"
-        # response += b"<p>You are not allowed to access this website.</p>"
-        # response += b"</body></html>"
-        # Return 403 Forbidden with custom HTML content
-        response = b"HTTP/1.0 403 Forbidden\r\nContent-Type: text/html\r\n\r\n"
-        response += b"<!DOCTYPE html>\n<html lang='en'>\n<head>\n<meta charset='UTF-8'>\n<meta name='viewport' content='width=device-width, initial-scale=1.0'>\n<title>403 Error</title>\n<style>\n"
-        # Append the custom CSS styles here
-        response += b"""body {
-                          background: #1b1b1b;
-                          color: white;
-                          font-family: "Bungee", cursive;
-                          margin-top: 50px;
-                          text-align: center;
-                        }
-                        a {
-                          color: #2aa7cc;
-                          text-decoration: none;
-                        }
-
-                        a:hover {
-                          color: white;
-                        }
-                        
-                        svg {
-                          width: 50vw;
-                        }
-                        
-                        .lightblue {
-                          fill: #444;
-                        }
-                        
-                        .eye {
-                          cx: calc(115px + 30px * var(--mouse-x));
-                          cy: calc(50px + 30px * var(--mouse-y));
-                        }
-                        
-                        #eye-wrap {
-                          overflow: hidden;
-                        }
-                        
-                        .error-text {
-                          font-size: 120px;
-                        }
-                        
-                        .alarm {
-                          animation: alarmOn 0.5s infinite;
-                        }
-                        
-                        @keyframes alarmOn {
-                          to {
-                            fill: darkred;
-                          }
-                        }</style>\n</head>\n<body>\n<svg xmlns='http://www.w3.org/2000/svg' id='robot-error' viewBox='0 0 260 118.9' role='img'>\n<title xml:lang='en'>403 Error</title>\n<defs>\n<clipPath id='white-clip'>\n<circle id='white-eye' fill='#cacaca' cx='130' cy='65' r='20' />\n</clipPath>\n<text id='text-s' class='error-text' y='106'> 403 </text>\n</defs>\n<path class='alarm' fill='#e62326' d='M120.9 19.6V9.1c0-5 4.1-9.1 9.1-9.1h0c5 0 9.1 4.1 9.1 9.1v10.6' />\n<use xlink:href='#text-s' x='-0.5px' y='-1px' fill='black'></use>\n<use xlink:href='#text-s' fill='#2b2b2b'></use>\n<g id='robot'>\n<g id='eye-wrap'>\n<use xlink:href='#white-eye'></use>\n<circle id='eyef' class='eye' clip-path='url(#white-clip)' fill='#000' stroke='#2aa7cc' stroke-width='2' stroke-miterlimit='10' cx='130' cy='65' r='11' />\n<ellipse id='white-eye' fill='#2b2b2b' cx='130' cy='40' rx='18' ry='12' />\n</g>\n<circle class='lightblue' cx='105' cy='32' r='2.5' id='tornillo' />\n<use xlink:href='#tornillo' x='50'></use>\n<use xlink:href='#tornillo' x='50' y='60'></use>\n<use xlink:href='#tornillo' y='60'></use>\n</g>\n</svg>\n<h1>You are not allowed to enter here</h1>\n<script>\nvar root = document.documentElement;\nvar eyef = document.getElementById('eyef');\nvar cx = document.getElementById('eyef').getAttribute('cx');\nvar cy = document.getElementById('eyef').getAttribute('cy');\ndocument.addEventListener('mousemove', evt => {\nlet x = evt.clientX / innerWidth;\nlet y = evt.clientY / innerHeight;\nroot.style.setProperty('--mouse-x', x);\nroot.style.setProperty('--mouse-y', y);\ncx = 115 + 30 * x;\ncy = 50 + 30 * y;\neyef.setAttribute('cx', cx);\neyef.setAttribute('cy', cy);\n});\ndocument.addEventListener('touchmove', touchHandler => {\nlet x = touchHandler.touches[0].clientX / innerWidth;\nlet y = touchHandler.touches[0].clientY / innerHeight;\nroot.style.setProperty('--mouse-x', x);\nroot.style.setProperty('--mouse-y', y);\n});\n</script>\n</body>\n</html>\n"""
-        # End of custom CSS styles
-        response += b"</body></html>"
+        response403
+        
     elif http_method not in ["GET", "POST", "HEAD"]:
         # Return 405 Method Not Allowed with custom HTML content
         response = b"HTTP/1.0 405 Method Not Allowed\r\nContent-Type: text/html\r\n\r\n"
