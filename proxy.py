@@ -99,7 +99,7 @@ def handle_client(tcpCliSock):
     # Check if the requested website is whitelisted
     host = filename.split("/")[0]
     if not is_whitelisted(host):
-        response403
+        response = response403()
         
     elif http_method not in ["GET", "POST", "HEAD"]:
         # Return 405 Method Not Allowed with custom HTML content
