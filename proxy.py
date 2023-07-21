@@ -14,7 +14,7 @@ if not os.path.exists(cache_directory):
     os.makedirs(cache_directory)
 
 # Set caching time for images (in seconds)
-cache_time = 60 * 60  # 1 hour
+cache_time = 900  # 1 hour
 
 # Dictionary to track the last access time of websites
 last_access_time = {}
@@ -88,7 +88,7 @@ def response403():
 # Function to check if the current time is within the allowed hours (8 AM to 8 PM)
 def is_within_allowed_time():
     now = datetime.now().time()
-    return now >= datetime.strptime("08:00:00", "%H:%M:%S").time() and now <= datetime.strptime("20:00:00", "%H:%M:%S").time()
+    return now >= datetime.strptime("09:00:00", "%H:%M:%S").time() and now <= datetime.strptime("20:00:00", "%H:%M:%S").time()
 
 # Function to handle concurrent client connections
 def handle_client(tcpCliSock):
