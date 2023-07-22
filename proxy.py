@@ -14,7 +14,7 @@ if not os.path.exists(cache_directory):
     os.makedirs(cache_directory)
 
 # Set caching time for images (in seconds)
-cache_time = 900  # 1 hour
+cache_time = 900  # 15 minutes
 
 # Dictionary to track the last access time of websites
 last_access_time = {}
