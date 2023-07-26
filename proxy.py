@@ -19,7 +19,8 @@ def read_server_info(filename):
         config_data = file.read().splitlines()
         server_ip = config_data[0].split("=")[1].strip()
         server_port = int(config_data[1].split("=")[1].strip())
-        return server_ip, server_port
+        cache_time = int(config_data[2].split("=")[1].strip())
+        return server_ip, server_port, cache_time
 
 # Read config file to get white list server
 def read_whitelist(filename):
@@ -166,7 +167,7 @@ if __name__ == "__main__":
 
     # Read the server IP and port from the config file
     config_file = sys.argv[1]
-    server_ip, server_port = read_server_info(config_file)
+    server_ip, server_port, cache_time = read_server_info(config_file)
 
     # Create a server socket, bind it to the server IP and port, and start listening
     tcpSerSock = socket(AF_INET, SOCK_STREAM)
