@@ -1,2 +1,5 @@
 SERVER_IP=127.0.0.1
 SERVER_PORT=8888
+cache_time = 900
+whitelist=example.com,example2.com
+time=08:00:00-20:00:00

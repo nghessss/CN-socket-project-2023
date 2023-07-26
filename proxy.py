@@ -5,32 +5,35 @@ import os
 import time
 from datetime import datetime
 
-# Whitelisted websites
-whitelist = ["example.com", "example2.com"]  # Add allowed websites here
-
 # Cache directory for storing images
 cache_directory = "cache"
 if not os.path.exists(cache_directory):
     os.makedirs(cache_directory)
 
-# Set caching time for images (in seconds)
-cache_time = 900  # 15 minutes
-
 # Dictionary to track the last access time of websites
 last_access_time = {}
 
 # Read config file to get server IP and port
-def read_config_file(filename):
+def read_server_info(filename):
     with open(filename, "r") as file:
         config_data = file.read().splitlines()
         server_ip = config_data[0].split("=")[1].strip()
         server_port = int(config_data[1].split("=")[1].strip())
         return server_ip, server_port
 
+# Read config file to get white list server
+def read_whitelist(filename):
+    with open(filename, "r") as file:
+        config_data = file.read().splitlines()
+        whitelist = config_data[3].split("=")[1].strip().split(",")
+        return whitelist
+
 # Function to check if a website is whitelisted
 def is_whitelisted(host):
+    whitelist = read_whitelist("proxy_config.txt")
     return any(host.endswith(allowed_host) for allowed_host in whitelist)
 
+# Function to read error 403 .html template 
 def read_response403(filename):
     if filename == "custom403.html":
         with open("custom403.html", "rb") as html_file:
@@ -39,9 +42,23 @@ def read_response403(filename):
     return response
 
 # Function to check if the current time is within the allowed hours (8 AM to 8 PM)
-def is_within_allowed_time():
+def is_within_allowed_time(config_filename):
+    # Read the allowed time range from the config file
+    with open(config_filename, "r") as file:
+        config_data = file.read().splitlines()
+        allowed_time_range = config_data[4].split("=")[1].strip()
+
+    # Extract start and end time from the allowed time range
+    start_time_str, end_time_str = allowed_time_range.split("-")
+    start_time = datetime.strptime(start_time_str, "%H:%M:%S")
+    end_time = datetime.strptime(end_time_str, "%H:%M:%S")
+
+    # Get the current time
     now = datetime.now().time()
-    return now >= datetime.strptime("08:00:00", "%H:%M:%S").time() and now <= datetime.strptime("20:00:00", "%H:%M:%S").time()
+
+    # Check if the current time is within the allowed time range
+    return start_time.time() <= now <= end_time.time()
+
 
 # Function to handle concurrent client connections
 def handle_client(tcpCliSock):
@@ -60,8 +77,7 @@ def handle_client(tcpCliSock):
     # Check if the requested website is whitelisted
     host = filename.split("/")[0]
 
-    if not is_within_allowed_time():
-        # response = response403()
+    if not is_within_allowed_time("proxy_config.txt"):
         response = read_response403("custom403.html")
     elif not is_whitelisted(host):
         # response = response403() 
@@ -150,7 +166,7 @@ if __name__ == "__main__":
 
     # Read the server IP and port from the config file
     config_file = sys.argv[1]
-    server_ip, server_port = read_config_file(config_file)
+    server_ip, server_port = read_server_info(config_file)
 
     # Create a server socket, bind it to the server IP and port, and start listening
     tcpSerSock = socket(AF_INET, SOCK_STREAM)
