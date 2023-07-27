@@ -83,9 +83,7 @@ def proxy_thread(client_socket, config):
     url = url[start_idx:end_idx] + url[end_idx:]
     if url.endswith('/'):
         url = url[:-1]
-    print(url)
-    print("NOTICE ME NOTICE ME NOTICE ME NOTICE ME NOTICE ME NOTICE ME NOTICE ME NOTICE ME")
-
+        
     # Kiểm tra phương thức
     if method not in ['GET', 'POST', 'HEAD']:
         response = 'HTTP/1.1 403 Forbidden\r\n\r\nMethod Not Allowed'
