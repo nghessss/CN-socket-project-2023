@@ -1,3 +1,3 @@
 cache_time = 60
-whitelisting = example.com, oosc.online, google.com, bing.com, testphp.vulnweb.com/login.php, vbsca.ca/login/login.asp, vbsca.ca/login/, vbsca.ca/login/LoginsAndPermissions3.htm
-time = 8-20
+whitelisting = example.com, oosc.online, google.com, bing.com, testphp.vulnweb.com, vbsca.ca
+time = 8-21

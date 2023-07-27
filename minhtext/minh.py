@@ -36,7 +36,11 @@ def read_config(config_file):
 
 # Kiểm tra xem domain có nằm trong whitelist không
 def is_whitelisted(domain, whitelist):
-    return any(domain.endswith(allowed_domain) for allowed_domain in whitelist)
+    for i in whitelist:
+        if i in domain:
+            return True
+    return False
+
 
 # Kiểm tra giới hạn truy cập theo thời gian
 def check_access_limit(start_time, end_time):
@@ -79,6 +83,8 @@ def proxy_thread(client_socket, config):
     url = url[start_idx:end_idx] + url[end_idx:]
     if url.endswith('/'):
         url = url[:-1]
+    print(url)
+    print("NOTICE ME NOTICE ME NOTICE ME NOTICE ME NOTICE ME NOTICE ME NOTICE ME NOTICE ME")
 
     # Kiểm tra phương thức
     if method not in ['GET', 'POST', 'HEAD']:
