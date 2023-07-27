@@ -5,34 +5,48 @@ import time
 import threading
 import argparse
 
-CACHE_DIR = 'cached_images'
-ACCESS_LIMIT = 10
-ACCESS_PERIOD = 60
 
-# Đảm bảo thư mục cache tồn tại
-if not os.path.exists(CACHE_DIR):
-    os.makedirs(CACHE_DIR)
 
 # Function to read the config file manually
 def read_config(config_file):
-    cache_time = None
-    whitelisting = []
-    time_range = None
-
+    config = {
+        'CACHE_DIR': '',
+        'ACCESS_LIMIT': 0,
+        'ACCESS_PERIOD': 0,
+        'SERVER_IP': '',
+        'SERVER_PORT': 0,
+        'CACHE_TIME': 0,
+        'WHITELISTING': [],
+        'TIME_START': 0,
+        'TIME_END': 0
+    }
     with open(config_file, 'r') as f:
         for line in f:
-            if 'cache_time' in line:
-                cache_time = int(line.split('=')[1].split('#')[0].strip())
-            elif 'whitelisting' in line:
-                whitelisting = [domain.strip() for domain in line.split('=')[1].split(',')]
-            elif 'time' in line:
-                time_range = line.split('=')[1].strip()
+            key, value = line.strip().split('=')
+            key = key.strip()
+            value = value.strip()
 
-    if cache_time is None or time_range is None:
-        raise ValueError("Invalid config file format. Make sure cache_time and time are specified.")
-    
-    start_time, end_time = map(int, time_range.split('-'))
-    return cache_time, whitelisting, start_time, end_time
+            if key == 'CACHE_DIR':
+                config['CACHE_DIR'] = value
+            elif key == 'ACCESS_LIMIT':
+                config['ACCESS_LIMIT'] = int(value)
+            elif key == 'ACCESS_PERIOD':
+                config['ACCESS_PERIOD'] = int(value)
+            elif key == 'SERVER_IP':
+                config['SERVER_IP'] = value
+            elif key == 'SERVER_PORT':
+                config['SERVER_PORT'] = int(value)
+            elif key == 'CACHE_TIME':
+                config['CACHE_TIME'] = int(value)
+            elif key == 'WHITELISTING':
+                config['WHITELISTING'] = [domain.strip() for domain in value.split(',')]
+            elif key == 'TIME':
+                time_range = value.split('-')
+                config['TIME_START'] = int(time_range[0].strip())
+                config['TIME_END'] = int(time_range[1].strip())
+    if not all(config.values()):
+        raise ValueError("Invalid config file format. Make sure all configuration values are specified.")
+    return config
 
 # Kiểm tra xem domain có nằm trong whitelist không
 def is_whitelisted(domain, whitelist):
@@ -41,20 +55,19 @@ def is_whitelisted(domain, whitelist):
             return True
     return False
 
-
 # Kiểm tra giới hạn truy cập theo thời gian
 def check_access_limit(start_time, end_time):
     current_hour = time.localtime().tm_hour
     return start_time <= current_hour < end_time
 
 # Hàm lưu ảnh vào cache
-def save_image_to_cache(url, data):
+def save_image_to_cache(url, data, CACHE_DIR):
     filename = os.path.join(CACHE_DIR, url.replace('/', '_').replace(':', '_'))
     with open(filename, 'wb') as f:
         f.write(data)
 
 # Hàm lấy dữ liệu ảnh từ cache
-def get_image_from_cache(url):
+def get_image_from_cache(url, CACHE_DIR):
     filename = os.path.join(CACHE_DIR, url.replace('/', '_').replace(':', '_'))
     if os.path.exists(filename):
         with open(filename, 'rb') as f:
@@ -69,7 +82,7 @@ def is_image(url):
     return any(url.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp'])
 
 def proxy_thread(client_socket, config):
-    cache_time, whitelisting, start_time, end_time = config
+    CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, TIME_START, TIME_END = config
     request_data = client_socket.recv(4096)
     request_string = request_data.decode('utf-8')
 
@@ -83,9 +96,7 @@ def proxy_thread(client_socket, config):
     url = url[start_idx:end_idx] + url[end_idx:]
     if url.endswith('/'):
         url = url[:-1]
-    print(url)
-    print("NOTICE ME NOTICE ME NOTICE ME NOTICE ME NOTICE ME NOTICE ME NOTICE ME NOTICE ME")
-
+        
     # Kiểm tra phương thức
     if method not in ['GET', 'POST', 'HEAD']:
         response = 'HTTP/1.1 403 Forbidden\r\n\r\nMethod Not Allowed'
@@ -94,13 +105,13 @@ def proxy_thread(client_socket, config):
         return
 
     # Kiểm tra giới hạn truy cập theo thời gian
-    if not check_access_limit(start_time, end_time):
-        response = 'HTTP/1.1 403 Forbidden\r\n\r\nAccess is limited from {} to {}'.format(start_time, end_time)
+    if not check_access_limit(TIME_START, TIME_END):
+        response = 'HTTP/1.1 403 Forbidden\r\n\r\nAccess is limited from {} to {}'.format(TIME_START, TIME_END)
         client_socket.sendall(response.encode('utf-8'))
         client_socket.close()
         return
 
-    if not is_whitelisted(url, whitelisting):
+    if not is_whitelisted(url, WHITELISTING):
         response = 'HTTP/1.1 403 Forbidden\r\n\r\nForbidden'
         client_socket.sendall(response.encode('utf-8'))
         client_socket.close()
@@ -135,14 +146,16 @@ def proxy_thread(client_socket, config):
 
 
 def main(config_file):
+    config = read_config(config_file)
+    CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, TIME_START, TIME_END  = config
+    if not os.path.exists(CACHE_DIR):
+        os.makedirs(CACHE_DIR)
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind(('127.0.0.1', 8888))
-    server.listen(5)
+    server.bind((SERVER_IP, SERVER_PORT))
+    server.listen(ACCESS_LIMIT)
 
     print('Proxy server is listening on port 8888...')
     
-    config = read_config(config_file)
-
     while True:
         client_socket, addr = server.accept()
         print(f"Accepted connection from {addr}")
@@ -155,3 +168,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     main(args.config)
+
