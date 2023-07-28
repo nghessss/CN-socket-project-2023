@@ -3,6 +3,6 @@ ACCESS_LIMIT=10
 ACCESS_PERIOD=60
 SERVER_IP=127.0.0.1
 SERVER_PORT=8888
-CACHE_TIME=5
+CACHE_TIME=10
 WHITELISTING=example.com, oosc.online, google.com, bing.com, testphp.vulnweb.com, vbsca.ca
 TIME=00:00:00-23:59:59

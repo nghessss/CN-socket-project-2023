@@ -204,4 +204,3 @@ if __name__ == '__main__':
     parser.add_argument('config', help='Path to the config file')
     args = parser.parse_args()
     main(args.config)
-
