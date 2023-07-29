@@ -44,7 +44,6 @@ def read_config(config_file):
 
     return CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, start_time, end_time
 
-
 # Kiểm tra xem domain có nằm trong whitelist không
 def is_whitelisted(domain, whitelist):
     for i in whitelist:
@@ -115,10 +114,11 @@ def proxy_thread(client_socket, config):
     CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, START_TIME, END_TIME = config
     request_data = client_socket.recv(4096)
     request_string = request_data.decode('utf-8')
+
     # Split the request into lines and extract the request line
     request_lines = request_string.strip().split('\r\n')
     request_line = request_lines[0]
-    # Kiểm tra HTTPS
+
     # Extract method and URL from the request line
     method, url, _ = request_line.split(' ')
     start_idx = url.find("://") + len("://")
@@ -126,7 +126,7 @@ def proxy_thread(client_socket, config):
     url = url[start_idx:end_idx] + url[end_idx:]
     if url.endswith('/'):
         url = url[:-1]
-        
+
     # Kiểm tra phương thức
     if method not in ['GET', 'POST', 'HEAD']:
         response = 'HTTP/1.1 403 Forbidden\r\n\r\nMethod Not Allowed'
@@ -163,18 +163,25 @@ def proxy_thread(client_socket, config):
     headers.pop('Host', None)
     response = requests.request(method, f"http://{url}", headers=headers, stream=True)
 
-    if is_image(url) and response.status_code == 200:
-        save_image_to_cache(url, response.content, CACHE_DIR)
+    # Determine if the connection should be kept alive
+    is_keep_alive = 'Transfer-Encoding' in response.headers and response.headers['Transfer-Encoding'] == 'chunked' or int(response.headers.get('Content-Length', 0)) > 0
 
+    # Copy the response headers to the client socket
     for key, value in response.headers.items():
         client_socket.send(f"{key}: {value}\r\n".encode('utf-8'))
 
-    client_socket.send(b'\r\n')
+    # Add Connection header based on is_keep_alive
+    if is_keep_alive:
+        client_socket.send(b"Connection: keep-alive\r\n\r\n")
+    else:
+        client_socket.send(b"Connection: close\r\n\r\n")
 
     for chunk in response.iter_content(chunk_size=4096):
         client_socket.send(chunk)
 
-    client_socket.close()
+    # If not keep-alive, close the connection
+    if not is_keep_alive:
+        client_socket.close()
 
 
 def main(config_file):
