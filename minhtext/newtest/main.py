@@ -44,6 +44,12 @@ def read_config(config_file):
 
     return CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, start_time, end_time
 
+# Kiểm tra https
+def is_https(request_string):
+    if ("CONNECT" in request_string):
+        return True
+    return False
+
 # Kiểm tra xem domain có nằm trong whitelist không
 def is_whitelisted(domain, whitelist):
     for i in whitelist:
@@ -87,6 +93,7 @@ def get_image_from_cache(url, CACHE_DIR, CACHE_TIME):
             os.remove(filename)
             os.remove(cache_time_filename)
     return None
+
 # Luồng thực hiện việc loại bỏ các đối tượng đã hết hạn khỏi cache sau mỗi 15 phút
 def remove_expired_cache(CACHE_DIR, CACHE_TIME):
     while True:
@@ -103,6 +110,7 @@ def remove_expired_cache(CACHE_DIR, CACHE_TIME):
                     cache_filename = os.path.join(CACHE_DIR, filename[:-5])
                     os.remove(cache_filename)
                     os.remove(cache_time_filename)
+
 # Biến lưu trữ logs truy cập
 access_logs = {}
 
@@ -110,23 +118,26 @@ access_logs = {}
 def is_image(url):
     return any(url.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp'])
 
-def proxy_thread(client_socket, config):
-    CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, START_TIME, END_TIME = config
-    request_data = client_socket.recv(4096)
-    request_string = request_data.decode('utf-8')
-
-    # Split the request into lines and extract the request line
+# Xử lí chuỗi request
+def handle_request(request_string):
     request_lines = request_string.strip().split('\r\n')
     request_line = request_lines[0]
-
-    # Extract method and URL from the request line
     method, url, _ = request_line.split(' ')
     start_idx = url.find("://") + len("://")
     end_idx = url.find("/", start_idx)
     url = url[start_idx:end_idx] + url[end_idx:]
     if url.endswith('/'):
         url = url[:-1]
+    return  request_line, request_lines, method, url, _
 
+
+def proxy_thread(client_socket, config):
+    CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, START_TIME, END_TIME = config
+    request_data = client_socket.recv(4096)
+    request_string = request_data.decode('utf-8')
+    print(request_string)
+    print("========================================================================================")
+    request_line, request_lines, method, url, _ = handle_request(request_string)
     # Kiểm tra phương thức
     if method not in ['GET', 'POST', 'HEAD']:
         response = 'HTTP/1.1 403 Forbidden\r\n\r\nMethod Not Allowed'
@@ -142,13 +153,12 @@ def proxy_thread(client_socket, config):
         client_socket.sendall(response.encode('utf-8'))
         client_socket.close()
         return
-
+    # Kiểm tra có nằm trong whitelist không
     if not is_whitelisted(url, WHITELISTING):
         response = 'HTTP/1.1 403 Forbidden\r\n\r\nForbidden'
         client_socket.sendall(response.encode('utf-8'))
         client_socket.close()
         return
-
     if is_image(url):
         cached_data = get_image_from_cache(url, CACHE_DIR, CACHE_TIME)
         if cached_data:
@@ -157,32 +167,33 @@ def proxy_thread(client_socket, config):
             client_socket.sendall(cached_data)
             client_socket.close()
             return
-
+        
     headers = {line.split(': ')[0]: line.split(': ')[1] for line in request_lines[1:]}
 
     headers.pop('Host', None)
     response = requests.request(method, f"http://{url}", headers=headers, stream=True)
+    # response_status_code
+    # response_content
+    # response_header
+    # response_text
+    # response.iter_content(chunk_size=4096):
+    if is_image(url) and response.status_code == 200:
+        save_image_to_cache(url, response.content, CACHE_DIR)
 
-    # Determine if the connection should be kept alive
-    is_keep_alive = 'Transfer-Encoding' in response.headers and response.headers['Transfer-Encoding'] == 'chunked' or int(response.headers.get('Content-Length', 0)) > 0
-
-    # Copy the response headers to the client socket
-    for key, value in response.headers.items():
-        client_socket.send(f"{key}: {value}\r\n".encode('utf-8'))
-
-    # Add Connection header based on is_keep_alive
-    if is_keep_alive:
-        client_socket.send(b"Connection: keep-alive\r\n\r\n")
+    content_type = response.headers.get('Content-Type', '')
+    if 'text/html' in content_type:
+        response_text = response.text
+        headers = f'HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n'
+        client_socket.sendall(headers.encode('utf-8'))
+        client_socket.sendall(response_text.encode('utf-8'))
     else:
-        client_socket.send(b"Connection: close\r\n\r\n")
+        # For other content types, send the binary data directly
+        headers = f'HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\n\r\n'
+        client_socket.sendall(headers.encode('utf-8'))
+        for chunk in response.iter_content(chunk_size=4096):
+            client_socket.send(chunk)
 
-    for chunk in response.iter_content(chunk_size=4096):
-        client_socket.send(chunk)
-
-    # If not keep-alive, close the connection
-    if not is_keep_alive:
-        client_socket.close()
-
+    client_socket.close()
 
 def main(config_file):
     config = read_config(config_file)
