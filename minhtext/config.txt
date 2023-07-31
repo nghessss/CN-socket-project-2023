@@ -1,3 +1,8 @@
-cache_time = 60
-whitelisting = example.com, oosc.online, google.com, bing.com, testphp.vulnweb.com, vbsca.ca
-time = 0-23
+CACHE_DIR=cached_images
+ACCESS_LIMIT=10
+ACCESS_PERIOD=60
+SERVER_IP=127.0.0.1
+SERVER_PORT=8888
+CACHE_TIME=10
+WHITELISTING=example.com, oosc.online, google.com, bing.com, testphp.vulnweb.com, vbsca.ca, thpt-huynhmandat-kiengiang.edu.vn
+TIME=00:00:00-23:59:59
