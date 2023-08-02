@@ -1,6 +1,5 @@
 import os
 import socket
-import requests
 import time
 import threading
 import argparse
@@ -58,7 +57,7 @@ def is_whitelisted(domain, whitelist):
     return False
 
 # Kiểm tra giới hạn truy cập theo thời gian
-def check_ACCESS_LIMIT(start_time, end_time):
+def check_access_limit(start_time, end_time):
     current_time = time.localtime()
     CURRENT_TIME = current_time.tm_hour * 3600 + current_time.tm_min * 60 + current_time.tm_sec
     START_TIME = start_time.tm_hour * 3600 + start_time.tm_min * 60 + start_time.tm_sec
@@ -129,45 +128,70 @@ def handle_request(request_string):
     if url.endswith('/'):
         url = url[:-1]
     return  request_line, request_lines, method, url, _
+# Create a connection pool
+connection_pool = {}
 
-def receive_all(socket):
-    """Receive all data from the socket until no more data is available."""
-    chunks = []
+def get_connection(host, port):
+    key = (host, port)
+    if key not in connection_pool:
+        conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        conn.connect((host, port))
+        connection_pool[key] = conn
+    return connection_pool[key]
+
+def send_http_request(method, url, headers):
+    url_parts = url.split('/', 3)
+    protocol = url_parts[0]
+    host_port = url_parts[2].split(':')
+    host = host_port[0]
+    port = int(host_port[1]) if len(host_port) > 1 else 80
+    path = '/' + url_parts[3] if len(url_parts) > 3 else '/'
+
+    conn = get_connection(host, port)
+
+    request = f"{method} {path} HTTP/1.1\r\nHost: {host}\r\n"
+    for key, value in headers.items():
+        request += f"{key}: {value}\r\n"
+    request += "\r\n"
+
+    conn.sendall(request.encode('utf-8'))
+
+    response = b""
     while True:
-        chunk = socket.recv(4096)
-        if not chunk:
+        data = conn.recv(4096)
+        if not data:
             break
-        chunks.append(chunk)
-    return b''.join(chunks)
+        response += data
+        print(response.decode('utf-8'))
+    return response
 
 def proxy_thread(client_socket, config):
     CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, START_TIME, END_TIME = config
     request_data = client_socket.recv(4096)
     request_string = request_data.decode('utf-8')
-    print(request_string)
-    print("========================================================================================")
+    
     request_line, request_lines, method, url, _ = handle_request(request_string)
-    # Kiểm tra phương thức
+    
     if method not in ['GET', 'POST', 'HEAD']:
         response = 'HTTP/1.1 403 Forbidden\r\n\r\nMethod Not Allowed'
         client_socket.sendall(response.encode('utf-8'))
         client_socket.close()
         return
-
-    # Kiểm tra giới hạn truy cập theo thời gian
-    if not check_ACCESS_LIMIT(START_TIME, END_TIME):
+    
+    if not check_access_limit(START_TIME, END_TIME):
         start_time_str = time.strftime('%H:%M:%S', START_TIME)
         end_time_str = time.strftime('%H:%M:%S', END_TIME)
-        response = 'HTTP/1.1 403 Forbidden\r\n\r\nAccess is limited from {} to {}'.format(start_time_str, end_time_str)
+        response = f'HTTP/1.1 403 Forbidden\r\n\r\nAccess is limited from {start_time_str} to {end_time_str}'
         client_socket.sendall(response.encode('utf-8'))
         client_socket.close()
         return
-    # Kiểm tra có nằm trong whitelist không
+    
     if not is_whitelisted(url, WHITELISTING):
         response = 'HTTP/1.1 403 Forbidden\r\n\r\nForbidden'
         client_socket.sendall(response.encode('utf-8'))
         client_socket.close()
         return
+    
     if is_image(url):
         cached_data = get_image_from_cache(url, CACHE_DIR, CACHE_TIME)
         if cached_data:
@@ -176,71 +200,17 @@ def proxy_thread(client_socket, config):
             client_socket.sendall(cached_data)
             client_socket.close()
             return
-        
-    # Define HTTP request
-    request = f"{method} / HTTP/1.1\r\nHost: {url}\r\n"
-    for header in headers:
-        request += f"{header}: {headers[header]}\r\n"
-    request += "\r\n"
-
-    # Create socket and send request
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect((url, 80))
-    s.send(request.encode())
-
-    # Receive response and parse data
-    response = b""
-    while True:
-        data = s.recv(4096)
-        if not data:
-            break
-        response += data
-
-    response = response.decode()
-    response_lines = response.split("\r\n")
-    response_status_code = int(response_lines[0].split()[1])
-    response_headers = {}
-    i = 1
-    while i < len(response_lines):
-        if response_lines[i] == "":
-            break
-        header_parts = response_lines[i].split(": ")
-        response_headers[header_parts[0]] = header_parts[1]
-        i += 1
-    response_content = response_lines[i+1:]
-
-    # Check if version is HTTP/1.0 and handle accordingly
-    if "HTTP/1.0" in response_lines[0]:
-        response_text = "\r\n".join(response_content)
-    else:
-        response_text = ""
-        for chunk in response.iter_content(chunk_size=4096):
-            response_text += chunk.decode()
+    
     headers = {line.split(': ')[0]: line.split(': ')[1] for line in request_lines[1:]}
+    headers.pop('Host', None)
+    response_headers, response_content = send_http_request(method, f"http://{url}", headers)
+    
+    if is_image(url) and response_headers.startswith(b'HTTP/1.1 200 OK'):
+        save_image_to_cache(url, response_content, CACHE_DIR)
 
-    # response_status_code
-    # response_content
-    # response_header
-    # response_text
-    # response.iter_content(chunk_size=4096):
-    if is_image(url) and response_status_code == 200:
-        save_image_to_cache(url, response.content, CACHE_DIR)
-
-    content_type = response.headers.get('Content-Type', '')
-    if 'text/html' in content_type:
-        response_text = response.text
-        headers = f'HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n'
-        client_socket.sendall(headers.encode('utf-8'))
-        client_socket.sendall(response_text.encode('utf-8'))
-    else:
-        # For other content types, send the binary data directly
-        headers = f'HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\n\r\n'
-        client_socket.sendall(headers.encode('utf-8'))
-        for chunk in response.iter_content(chunk_size=4096):
-            client_socket.send(chunk)
-
+    client_socket.sendall(response_headers)
+    client_socket.sendall(response_content)
     client_socket.close()
-
 
 def main(config_file):
     config = read_config(config_file)
