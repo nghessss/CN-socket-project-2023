@@ -3,6 +3,7 @@ import socket
 import time
 import threading
 import argparse
+import gzip
 
 # Function to read the config file manually
 def read_config(config_file):
@@ -128,6 +129,7 @@ def handle_request(request_string):
     if url.endswith('/'):
         url = url[:-1]
     return  request_line, request_lines, method, url, _
+
 # Create a connection pool
 connection_pool = {}
 
@@ -149,20 +151,25 @@ def send_http_request(method, url, headers):
 
     conn = get_connection(host, port)
 
-    request = f"{method} {path} HTTP/1.1\r\nHost: {host}\r\n"
-    for key, value in headers.items():
-        request += f"{key}: {value}\r\n"
-    request += "\r\n"
+    request_lines = [
+        f"{method} {path} HTTP/1.1",
+        f"Host: {host}"
+    ] + [f"{key}: {value}" for key, value in headers.items()]
+    
+    request = '\r\n'.join(request_lines) + "\r\n\r\n"
 
     conn.sendall(request.encode('utf-8'))
 
     response = b""
     while True:
-        data = conn.recv(4096)
-        if not data:
+        try:
+            data = conn.recv(4096)
+            if not data:
+                break
+            response += data
+        except socket.error as e:
+            print("Socket error:", e)
             break
-        response += data
-        print(response.decode('utf-8'))
     return response
 
 def proxy_thread(client_socket, config):
@@ -192,25 +199,53 @@ def proxy_thread(client_socket, config):
         client_socket.close()
         return
     
-    if is_image(url):
-        cached_data = get_image_from_cache(url, CACHE_DIR, CACHE_TIME)
-        if cached_data:
-            response = 'HTTP/1.1 200 OK\r\n\r\n'
-            client_socket.sendall(response.encode('utf-8'))
-            client_socket.sendall(cached_data)
-            client_socket.close()
-            return
-    
     headers = {line.split(': ')[0]: line.split(': ')[1] for line in request_lines[1:]}
     headers.pop('Host', None)
-    response_headers, response_content = send_http_request(method, f"http://{url}", headers)
     
-    if is_image(url) and response_headers.startswith(b'HTTP/1.1 200 OK'):
-        save_image_to_cache(url, response_content, CACHE_DIR)
-
-    client_socket.sendall(response_headers)
-    client_socket.sendall(response_content)
+    if method == 'GET' or method == 'HEAD':
+        response = send_http_request(method, f"http://{url}", headers)
+        
+        # Split the response into headers and content
+        response_lines = response.split(b'\r\n\r\n', 1)
+        response_headers = response_lines[0]  # Access headers
+        response_content = response_lines[1] if len(response_lines) > 1 else b'' 
+        
+        if is_image(url):
+            cached_data = get_image_from_cache(url, CACHE_DIR, CACHE_TIME)
+            if cached_data:
+                response = 'HTTP/1.1 200 OK\r\n\r\n'
+                client_socket.sendall(response.encode('utf-8'))
+                client_socket.sendall(cached_data)
+                client_socket.close()
+                return
+        
+        if method == 'GET':
+            # Decompress the response content using gzip if applicable
+            if response_headers.startswith(b'HTTP/1.1 200 OK') and is_image(url):
+                response_content = gzip.decompress(response_content)
+            
+            # Send the original headers and (possibly decompressed) content
+            client_socket.sendall(response_headers)
+            client_socket.sendall(response_content)
+        
+        elif method == 'HEAD':
+            client_socket.sendall(response_headers)
+    
+    elif method == 'POST':
+        content_length = int(headers.get('Content-Length', 0))
+        post_data = request_string.split('\r\n\r\n', 1)[1][:content_length]
+        
+        response = send_http_request('POST', f"http://{url}", headers + {'Content-Length': str(content_length)}, post_data)
+        response_lines = response.split(b'\r\n\r\n', 1)
+        response_headers = response_lines[0]
+        response_content = response_lines[1] if len(response_lines) > 1 else b''
+        
+        # Send the original headers and content
+        client_socket.sendall(response_headers)
+        client_socket.sendall(response_content)
+    
     client_socket.close()
+
 
 def main(config_file):
     config = read_config(config_file)
