@@ -4,6 +4,7 @@ import requests
 import time
 import threading
 import argparse
+import gzip
 
 # Function to read the config file manually
 def read_config(config_file):
@@ -177,15 +178,19 @@ def proxy_thread(client_socket, config):
     # response_header
     # response_text
     # response.iter_content(chunk_size=4096):
-    print(response.headers)
     # print(response.content.decode('utf-8'))
+    
     if is_image(url) and response.status_code == 200:
         save_image_to_cache(url, response.content, CACHE_DIR)
-
+    print(response.content)
+    
+    print("focus hereeeeeeeee")
     content_type = response.headers.get('Content-Type', '')
     if 'text/html' in content_type:
         response_text = response.text
         headers = f'HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n'
+        print(headers + "header here\n")
+        print(response_text + "response here\n")
         client_socket.sendall(headers.encode('utf-8'))
         client_socket.sendall(response_text.encode('utf-8'))
     else:

@@ -4,8 +4,10 @@ import time
 import threading
 import argparse
 import gzip
-
+import zlib
+import asyncio
 # Function to read the config file manually
+
 def read_config(config_file):
     CACHE_DIR = None
     ACCESS_LIMIT = None
@@ -151,6 +153,9 @@ def send_http_request(method, url, headers):
 
     conn = get_connection(host, port)
 
+    if 'Connection' not in headers:
+        headers['Connection'] = 'Keep-Alive'
+
     request_lines = [
         f"{method} {path} HTTP/1.1",
         f"Host: {host}"
@@ -172,77 +177,117 @@ def send_http_request(method, url, headers):
             break
     return response
 
+def parse_response(response_string):
+    response_lines = response_string.strip().split('\n')
+    response_headers = {}
+
+    for line in response_lines[1:]:
+        if line.strip() == '':
+            break
+        parts = line.split(': ', 1)
+        if len(parts) == 2:
+            key, value = parts
+            response_headers[key] = value
+        else:
+            key = parts[0]
+            response_headers[key] = ''
+
+    content_encoding = response_headers.get('Content-Encoding', '')
+    content_type = response_headers.get('Content-Type', '')
+    
+    content = "\r\n".join([f"{key}: {value}" for key, value in response_headers.items()])
+    
+    return {
+        'content': content,
+        'content_encoding': content_encoding,
+        'content_type': content_type,
+        'headers': response_headers
+    }
+
+def send_response(client_socket, headers, content=b''):
+    client_socket.sendall(headers.encode('utf-8'))
+    client_socket.sendall(b'\r\n\r\n')
+    client_socket.sendall(content)
+
+
 def proxy_thread(client_socket, config):
     CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, START_TIME, END_TIME = config
-    request_data = client_socket.recv(4096)
-    request_string = request_data.decode('utf-8')
-    
-    request_line, request_lines, method, url, _ = handle_request(request_string)
-    
-    if method not in ['GET', 'POST', 'HEAD']:
-        response = 'HTTP/1.1 403 Forbidden\r\n\r\nMethod Not Allowed'
-        client_socket.sendall(response.encode('utf-8'))
-        client_socket.close()
-        return
-    
-    if not check_access_limit(START_TIME, END_TIME):
-        start_time_str = time.strftime('%H:%M:%S', START_TIME)
-        end_time_str = time.strftime('%H:%M:%S', END_TIME)
-        response = f'HTTP/1.1 403 Forbidden\r\n\r\nAccess is limited from {start_time_str} to {end_time_str}'
-        client_socket.sendall(response.encode('utf-8'))
-        client_socket.close()
-        return
-    
-    if not is_whitelisted(url, WHITELISTING):
-        response = 'HTTP/1.1 403 Forbidden\r\n\r\nForbidden'
-        client_socket.sendall(response.encode('utf-8'))
-        client_socket.close()
-        return
-    
-    headers = {line.split(': ')[0]: line.split(': ')[1] for line in request_lines[1:]}
-    headers.pop('Host', None)
-    
-    if method == 'GET' or method == 'HEAD':
-        response = send_http_request(method, f"http://{url}", headers)
-        
-        # Split the response into headers and content
-        response_lines = response.split(b'\r\n\r\n', 1)
-        response_headers = response_lines[0]  # Access headers
-        response_content = response_lines[1] if len(response_lines) > 1 else b'' 
-        
-        if is_image(url):
-            cached_data = get_image_from_cache(url, CACHE_DIR, CACHE_TIME)
-            if cached_data:
-                response = 'HTTP/1.1 200 OK\r\n\r\n'
-                client_socket.sendall(response.encode('utf-8'))
-                client_socket.sendall(cached_data)
-                client_socket.close()
-                return
-        
-        if method == 'GET':
-            # Decompress the response content using gzip if applicable
-            if response_headers.startswith(b'HTTP/1.1 200 OK') and is_image(url):
-                response_content = gzip.decompress(response_content)
+
+    try:
+        while True:
+            request_data = client_socket.recv(4096)
+            if not request_data:
+                break
             
-            # Send the original headers and (possibly decompressed) content
-            client_socket.sendall(response_headers)
-            client_socket.sendall(response_content)
+            request_string = request_data.decode('utf-8')
+            request_line, request_lines, method, url, _ = handle_request(request_string)
+            
+            if method not in ['GET', 'POST', 'HEAD']:
+                send_response(client_socket, 'HTTP/1.1 403 Forbidden\r\n\r\nMethod Not Allowed')
+                break
+            
+            if not check_access_limit(START_TIME, END_TIME):
+                send_response(client_socket, 'HTTP/1.1 403 Forbidden\r\n\r\nAccess Denied')
+                break
+            
+            if not is_whitelisted(url, WHITELISTING):
+                send_response(client_socket, 'HTTP/1.1 403 Forbidden\r\n\r\nForbidden')
+                break
+            
+            headers = {line.split(': ')[0]: line.split(': ')[1] for line in request_lines[1:]}
+            headers.pop('Host', None)
+            
+            if method == 'GET' or method == 'HEAD':
+                response = send_http_request(method, f"http://{url}", headers)
+                response_lines = response.split(b'\r\n\r\n', 1)
+                response_headers = response_lines[0]
+                response_content = response_lines[1] if len(response_lines) > 1 else b''
+                
+                # Check for "Transfer-Encoding: chunked" and handle accordingly
+                if b'Transfer-Encoding: chunked' in response_headers:
+                    chunks = response_content.split(b'\r\n')
+                    chunked_data = b"".join(chunks[1:-2])  # Join chunks, excluding the last empty line
+                    response_content = chunked_data
+                
+                response_headers = response_headers.decode('utf-8')
+                
+                if method == 'GET':
+                    if is_image(url):
+                        cached_data = get_image_from_cache(url, CACHE_DIR, CACHE_TIME)
+                        if cached_data:
+                            send_response(client_socket, 'HTTP/1.1 200 OK\r\n\r\n', cached_data)
+                            continue  # Keep the connection alive for Keep-Alive requests
+                        else:
+                            # Update the content type header for images
+                            image_response_headers = response_headers.replace('Content-Type: ', 'Content-Type: image/')
+                            save_image_to_cache(url, response_content, CACHE_DIR)
+                            send_response(client_socket, image_response_headers, response_content)
+                            continue
+                    
+                    send_response(client_socket, response_headers, response_content)
+            elif method == 'POST':
+                content_length = int(headers.get('Content-Length', 0))
+                post_data = b""
+                while len(post_data) < content_length:
+                    chunk = client_socket.recv(min(4096, content_length - len(post_data)))
+                    if not chunk:
+                        break
+                    post_data += chunk
+
+                response = send_http_request(method, f"http://{url}", headers, post_data)
+                response_lines = response.split(b'\r\n\r\n', 1)
+                response_headers = response_lines[0]
+                response_content = response_lines[1] if len(response_lines) > 1 else b''
+
+                response_headers = response_headers.decode('utf-8')
+
+                send_response(client_socket, response_headers, response_content)
+
+            # Always close the client socket after handling a single request
+            break
         
-        elif method == 'HEAD':
-            client_socket.sendall(response_headers)
-    
-    elif method == 'POST':
-        content_length = int(headers.get('Content-Length', 0))
-        post_data = request_string.split('\r\n\r\n', 1)[1][:content_length]
-        
-        response = send_http_request('POST', f"http://{url}", headers + {'Content-Length': str(content_length)}, post_data)
-        response_lines = response.split(b'\r\n\r\n', 1)
-        response_headers = response_lines[0]
-        response_content = response_lines[1] if len(response_lines) > 1 else b''
-        
-        # Send the original headers and content
-        client_socket.sendall(response_headers)
-        client_socket.sendall(response_content)
+    except Exception as e:
+        print("An error occurred:", e)
     
     client_socket.close()
 
