@@ -134,12 +134,7 @@ def handle_request(request_data):
         return method, url, host_name
     except:
         return None, None, None
-
-def create_http_request(method, url, headers):
-    headers_str = '\r\n'.join(f"{key}: {value}" for key, value in headers.items())
-    request_str = f"{method} / HTTP/1.1\r\nHost: {url}\r\n{headers_str}\r\n\r\n"
-    return request_str.encode('utf-8')
-
+        
 def get_status(server_respone):
     buf = server_respone.split(b'\r\n')[0]
     return buf.split(b' ')[1]
