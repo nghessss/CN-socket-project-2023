@@ -250,11 +250,9 @@ def proxy_thread(client_socket, config):
         server_response = get_server_respone(host_name, request_data, port)
         client_socket.sendall(server_response)
         client_socket.close()
-        return
 
     except OSError:
         client_socket.close()
-        return
 
 
 def main(config_file):
