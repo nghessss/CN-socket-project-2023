@@ -131,9 +131,22 @@ def handle_request(request_data):
         method = line.split(' ')[0]
         url = line.split(' ')[1]
         host_name = url.split('/')[2]
-        return method, url, host_name
+        
+        start_idx = url.find("://") + len("://")
+        end_idx = url.find("/", start_idx)
+        
+        if end_idx == -1:
+            end_idx = len(url)
+        url = url[start_idx:end_idx]
+        
+        if ':' in url:
+            url, port = url.split(':')
+            port = int(port)
+        else:
+            port = 80
+        return method, url, host_name, port
     except:
-        return None, None, None
+        return None, None, None, 80
         
 def get_status(server_respone):
     buf = server_respone.split(b'\r\n')[0]
@@ -150,9 +163,9 @@ def get_content_length(headers):
             return length
     return 0
 
-def get_server_respone(host_name, request_data):
+def get_server_respone(host_name, request_data, port):
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.connect((host_name, 80))
+    server_socket.connect((host_name, port))
     server_socket.sendall(request_data)
     
     # Get the response from web server
@@ -205,7 +218,7 @@ def proxy_thread(client_socket, config):
     try:
         CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, START_TIME, END_TIME = config
         request_data = client_socket.recv(4096)
-        method, url, host_name = handle_request(request_data)
+        method, url, host_name, port = handle_request(request_data)
         request_lines = request_data.decode().strip().split('\r\n')
 
         print(request_data.decode())
@@ -227,12 +240,12 @@ def proxy_thread(client_socket, config):
             cached_data = get_image_from_cache(url, CACHE_DIR, CACHE_TIME)
             if cached_data:
                 response = 'HTTP/1.1 200 OK\r\n\r\n'
-                client_socket.sendall(response.encode('utf-8'))
+                client_socket.sendall(response.decode())
                 client_socket.sendall(cached_data)
                 client_socket.close()
                 return
 
-        server_response = get_server_respone(host_name, request_data)
+        server_response = get_server_respone(host_name, request_data, port)
         client_socket.sendall(server_response)
         client_socket.close()
 
