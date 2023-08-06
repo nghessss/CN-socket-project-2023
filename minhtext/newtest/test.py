@@ -133,22 +133,9 @@ def handle_request(request_data):
         method = line.split(' ')[0]
         url = line.split(' ')[1]
         host_name = url.split('/')[2]
-        
-        start_idx = url.find("://") + len("://")
-        end_idx = url.find("/", start_idx)
-        
-        if end_idx == -1:
-            end_idx = len(url)
-        url = url[start_idx:end_idx]
-        
-        if ':' in url:
-            url, port = url.split(':')
-            port = int(port)
-        else:
-            port = 80
-        return method, url, host_name, port
+        return method, url, host_name
     except:
-        return None, None, None, 80
+        return None, None, None
         
 def get_status(server_respone):
     buf = server_respone.split(b'\r\n')[0]
@@ -165,13 +152,13 @@ def get_content_length(headers):
             return length
     return 0
 
-def get_server_respone(host_name, request_data, port):
+def get_server_respone(host_name, request_data):
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.connect((host_name, port))
+    server_socket.connect((host_name, 80))
     server_socket.sendall(request_data)
     
     # Get the response from web server
-    server_respone = server_socket.recv(4096)
+    server_respone = server_socket.recv(1024)
 
     # Get the header of the request
     chunked_encoding = False
@@ -185,7 +172,7 @@ def get_server_respone(host_name, request_data, port):
     # If the response is "connection: close", get the response until the end of the response (the web server will closed eventually)
     if get_connection_close(headers):
         while True:
-            data_chunk = server_socket.recv(4096)
+            data_chunk = server_socket.recv(1024)
             if (data_chunk):
                 server_respone += data_chunk
             else:
@@ -207,7 +194,7 @@ def get_server_respone(host_name, request_data, port):
             chunks = chunked_part.split(b"\r\n")
             if end_check not in chunks:
                 while True:
-                    data_chunk = server_socket.recv(4096)
+                    data_chunk = server_socket.recv(1024)
                     server_respone += data_chunk
                     data_chunks = data_chunk.split(b"\r\n")
                     if end_check in data_chunks:
@@ -216,15 +203,19 @@ def get_server_respone(host_name, request_data, port):
     server_socket.close()
     return server_respone
 
+def extract_response_content(server_response):
+    header_end = server_response.find(b"\r\n\r\n")
+    return server_response[header_end + 4:]
+
 def proxy_thread(client_socket, config):
     try:
         CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, START_TIME, END_TIME = config
         request_data = client_socket.recv(4096)
-        method, url, host_name, port = handle_request(request_data)
+        method, url, host_name = handle_request(request_data)
         request_lines = request_data.decode().strip().split('\r\n')
 
         print(request_data.decode())
-        if len(request_lines) > 0 or request_lines == ['']:
+        if len(request_lines) > 0 or request_lines != ['']:
             print("========================================================================================")
 
         if method not in ['GET', 'POST', 'HEAD'] or not check_ACCESS_LIMIT(START_TIME, END_TIME) or not is_whitelisted(url, WHITELISTING):
@@ -232,11 +223,10 @@ def proxy_thread(client_socket, config):
             client_socket.close()
             return
 
-        # if method == 'POST':
-        #     client_socket.sendall(request_data.encode('utf-8'))
-        # else:
-        #     remote_request = f"{method} {url} HTTP/1.1\r\nHost: {host_name}\r\n\r\n".encode()
-        #     client_socket.sendall(remote_request)
+        if url.startswith('http://'):
+            url = url[7:]
+        elif url.startswith('https://'):
+            url = url[8:]
 
         if is_image(url):
             cached_data = get_image_from_cache(url, CACHE_DIR, CACHE_TIME)
@@ -247,8 +237,11 @@ def proxy_thread(client_socket, config):
                 client_socket.close()
                 return
 
-        server_response = get_server_respone(host_name, request_data, port)
-        client_socket.sendall(server_response)
+        response = get_server_respone(host_name, request_data)
+
+        if is_image(url) and get_status(response) == b'200':
+            save_image_to_cache(url, extract_response_content(response), CACHE_DIR)
+        client_socket.sendall(response)
         client_socket.close()
 
     except OSError:
