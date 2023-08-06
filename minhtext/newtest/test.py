@@ -4,6 +4,8 @@ import time
 import threading
 import argparse
 
+error_codes = [b'400', b'401', b'403', b'404', b'405', b'408', b'500', b'502', b'503']
+
 # Function to read the config file manually
 def read_config(config_file):
     CACHE_DIR = None
@@ -177,7 +179,7 @@ def get_server_respone(host_name, request_data, port):
     headers = server_respone[:header_end]
     
     # If the response is error code, return 403 Forbidden
-    if get_status(server_respone) in [400, 401, 403, 404]:
+    if get_status(server_respone) in error_codes:
         return response403()
     
     # If the response is "connection: close", get the response until the end of the response (the web server will closed eventually)
@@ -222,7 +224,7 @@ def proxy_thread(client_socket, config):
         request_lines = request_data.decode().strip().split('\r\n')
 
         print(request_data.decode())
-        if len(request_lines) > 0:
+        if len(request_lines) > 0 or request_lines == ['']:
             print("========================================================================================")
 
         if method not in ['GET', 'POST', 'HEAD'] or not check_ACCESS_LIMIT(START_TIME, END_TIME) or not is_whitelisted(url, WHITELISTING):
@@ -248,9 +250,11 @@ def proxy_thread(client_socket, config):
         server_response = get_server_respone(host_name, request_data, port)
         client_socket.sendall(server_response)
         client_socket.close()
+        return
 
     except OSError:
         client_socket.close()
+        return
 
 
 def main(config_file):
