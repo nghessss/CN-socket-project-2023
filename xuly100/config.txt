@@ -5,4 +5,4 @@ SERVER_IP=127.0.0.1
 SERVER_PORT=8888
 CACHE_TIME=10
 WHITELISTING=example.com, oosc.online, google.com, bing.com, testphp.vulnweb.com, vbsca.ca, thpt-huynhmandat-kiengiang.edu.vn
-TIME=00:00:00-23:59:59
+TIME=08:00:00-23:59:59

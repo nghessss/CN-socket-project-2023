@@ -1,9 +1,10 @@
 import os
 import socket
-import requests
 import time
 import threading
 import argparse
+
+error_codes = [b'400', b'401', b'403', b'404', b'405', b'408', b'502', b'503']
 
 # Function to read the config file manually
 def read_config(config_file):
@@ -44,6 +45,11 @@ def read_config(config_file):
 
     return CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, start_time, end_time
 
+# Kiểm tra https
+def is_https(request_string):
+    if ("CONNECT" in request_string):
+        return True
+    return False
 
 # Kiểm tra xem domain có nằm trong whitelist không
 def is_whitelisted(domain, whitelist):
@@ -51,6 +57,12 @@ def is_whitelisted(domain, whitelist):
         if i in domain:
             return True
     return False
+
+def response403():
+    with open("custom403.html", "rb") as html_file:
+        content = html_file.read()
+        response = b"HTTP/1.0 403 Forbidden\r\nContent-Type: text/html\r\n\r\n" + content
+    return response
 
 # Kiểm tra giới hạn truy cập theo thời gian
 def check_ACCESS_LIMIT(start_time, end_time):
@@ -88,6 +100,7 @@ def get_image_from_cache(url, CACHE_DIR, CACHE_TIME):
             os.remove(filename)
             os.remove(cache_time_filename)
     return None
+
 # Luồng thực hiện việc loại bỏ các đối tượng đã hết hạn khỏi cache sau mỗi 15 phút
 def remove_expired_cache(CACHE_DIR, CACHE_TIME):
     while True:
@@ -104,6 +117,7 @@ def remove_expired_cache(CACHE_DIR, CACHE_TIME):
                     cache_filename = os.path.join(CACHE_DIR, filename[:-5])
                     os.remove(cache_filename)
                     os.remove(cache_time_filename)
+
 # Biến lưu trữ logs truy cập
 access_logs = {}
 
@@ -111,70 +125,143 @@ access_logs = {}
 def is_image(url):
     return any(url.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp'])
 
-def proxy_thread(client_socket, config):
-    CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, START_TIME, END_TIME = config
-    request_data = client_socket.recv(4096)
-    request_string = request_data.decode('utf-8')
-    # Split the request into lines and extract the request line
-    request_lines = request_string.strip().split('\r\n')
-    request_line = request_lines[0]
-    # Kiểm tra HTTPS
-    # Extract method and URL from the request line
-    method, url, _ = request_line.split(' ')
-    start_idx = url.find("://") + len("://")
-    end_idx = url.find("/", start_idx)
-    url = url[start_idx:end_idx] + url[end_idx:]
-    if url.endswith('/'):
-        url = url[:-1]
+
+# Xử lí chuỗi request
+def handle_request(request_data):
+    try:
+        line = request_data.decode()
+        method = line.split(' ')[0]
+        url = line.split(' ')[1]
+        host_name = url.split('/')[2]
+        return method, url, host_name
+    except:
+        return None, None, None
         
-    # Kiểm tra phương thức
-    if method not in ['GET', 'POST', 'HEAD']:
-        response = 'HTTP/1.1 403 Forbidden\r\n\r\nMethod Not Allowed'
-        client_socket.sendall(response.encode('utf-8'))
-        client_socket.close()
-        return
+def get_status(server_respone):
+    buf = server_respone.split(b'\r\n')[0]
+    return buf.split(b' ')[1]
 
-    # Kiểm tra giới hạn truy cập theo thời gian
-    if not check_ACCESS_LIMIT(START_TIME, END_TIME):
-        start_time_str = time.strftime('%H:%M:%S', START_TIME)
-        end_time_str = time.strftime('%H:%M:%S', END_TIME)
-        response = 'HTTP/1.1 403 Forbidden\r\n\r\nAccess is limited from {} to {}'.format(start_time_str, end_time_str)
-        client_socket.sendall(response.encode('utf-8'))
-        client_socket.close()
-        return
+def get_connection_close(server_respone):
+    return "connection: close" in server_respone.decode().lower()
 
-    if not is_whitelisted(url, WHITELISTING):
-        response = 'HTTP/1.1 403 Forbidden\r\n\r\nForbidden'
-        client_socket.sendall(response.encode('utf-8'))
-        client_socket.close()
-        return
+def get_content_length(headers):
+    line = headers.split(b"\r\n")
+    for l in line:
+        if l.startswith(b"Content-Length:") or l.startswith(b"content-length"):
+            length = int(l.split(b":")[1].strip())
+            return length
+    return 0
 
-    if is_image(url):
-        cached_data = get_image_from_cache(url, CACHE_DIR, CACHE_TIME)
-        if cached_data:
-            response = 'HTTP/1.1 200 OK\r\n\r\n'
-            client_socket.sendall(response.encode('utf-8'))
-            client_socket.sendall(cached_data)
+def get_server_response(host_name, request_data):
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.connect((host_name, 80))
+    server_socket.sendall(request_data)
+
+    # Get the response from the web server
+    server_response = b''
+    while True:
+        response_chunk = server_socket.recv(1024)
+        server_response += response_chunk
+        if b'\r\n\r\n' in server_response:
+            break
+
+    # Check for HTTP status code 100 Continue
+    while b'HTTP/1.1 100 Continue\r\n' in server_response:
+        # Send the request data again until you receive a non-100 response
+        server_response = b''
+        server_socket.sendall(request_data)
+        while True:
+            response_chunk = server_socket.recv(1024)
+            server_response += response_chunk
+            if b'\r\n\r\n' in server_response:
+                break
+
+    # Get the header of the response
+    header_end = server_response.find(b"\r\n\r\n")
+    headers = server_response[:header_end]
+
+    # If the response is an error code, return 403 Forbidden
+    if get_status(server_response) in error_codes:
+        return response403()
+
+    # If the response is "connection: close", get the response until the end of the response (the web server will close eventually)
+    if get_connection_close(headers):
+        while True:
+            data_chunk = server_socket.recv(1024)
+            if data_chunk:
+                server_response += data_chunk
+            else:
+                return server_response
+
+    # If the response is not "connection: close" and the body part is not empty, get the response by following the content length or chunked encoding
+    if header_end + 4 != len(server_response):
+        chunked_encoding = "transfer-encoding: chunked" in headers.decode().lower()
+        content_length = get_content_length(headers)
+        # If the response is not chunked encoding, get the response by content length
+        if not chunked_encoding and content_length > 0:
+            if len(server_response) < header_end + 4 + content_length:
+                length = content_length - (len(server_response) - header_end - 4)
+                while len(server_response) < header_end + content_length + 4:
+                    server_response += server_socket.recv(length)
+        else:  # If the response is chunked encoding, get the response until meet '0' in the body part
+            end_check = b'0'
+            chunked_part = server_response.split(b"\r\n\r\n")[1]
+            chunks = chunked_part.split(b"\r\n")
+            if end_check not in chunks:
+                while True:
+                    data_chunk = server_socket.recv(1024)
+                    server_response += data_chunk
+                    data_chunks = data_chunk.split(b"\r\n")
+                    if end_check in data_chunks:
+                        break
+
+    server_socket.close()
+    return server_response
+
+
+def extract_response_content(server_response):
+    header_end = server_response.find(b"\r\n\r\n")
+    return server_response[header_end + 4:]
+
+def proxy_thread(client_socket, config):
+    try:
+        CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, START_TIME, END_TIME = config
+        request_data = client_socket.recv(4096)
+        method, url, host_name = handle_request(request_data)
+        request_lines = request_data.decode().strip().split('\r\n')
+
+        print(request_data.decode())
+        if len(request_lines) > 0 or request_lines != ['']:
+            print("========================================================================================")
+
+        if method not in ['GET', 'POST', 'HEAD'] or not check_ACCESS_LIMIT(START_TIME, END_TIME) or not is_whitelisted(url, WHITELISTING):
+            client_socket.sendall(response403())
             client_socket.close()
             return
 
-    headers = {line.split(': ')[0]: line.split(': ')[1] for line in request_lines[1:]}
+        if url.startswith('http://'):
+            url = url[7:]
+        elif url.startswith('https://'):
+            url = url[8:]
 
-    headers.pop('Host', None)
-    response = requests.request(method, f"http://{url}", headers=headers, stream=True)
+        if is_image(url):
+            cached_data = get_image_from_cache(url, CACHE_DIR, CACHE_TIME)
+            if cached_data:
+                response = 'HTTP/1.1 200 OK\r\n\r\n'
+                client_socket.sendall(response.decode())
+                client_socket.sendall(cached_data)
+                client_socket.close()
+                return
 
-    if is_image(url) and response.status_code == 200:
-        save_image_to_cache(url, response.content, CACHE_DIR)
+        response = get_server_response(host_name, request_data)
 
-    for key, value in response.headers.items():
-        client_socket.send(f"{key}: {value}\r\n".encode('utf-8'))
+        if is_image(url) and get_status(response) == b'200':
+            save_image_to_cache(url, extract_response_content(response), CACHE_DIR)
+        client_socket.sendall(response)
+        client_socket.close()
 
-    client_socket.send(b'\r\n')
-
-    for chunk in response.iter_content(chunk_size=4096):
-        client_socket.send(chunk)
-
-    client_socket.close()
+    except OSError:
+        client_socket.close()
 
 
 def main(config_file):
