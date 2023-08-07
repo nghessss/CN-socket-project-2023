@@ -4,7 +4,7 @@ import time
 import threading
 import argparse
 
-error_codes = [b'400', b'401', b'403', b'404', b'405', b'408', b'500', b'502', b'503']
+error_codes = [b'400', b'401', b'403', b'404', b'405', b'408', b'502', b'503']
 
 # Function to read the config file manually
 def read_config(config_file):
@@ -152,56 +152,72 @@ def get_content_length(headers):
             return length
     return 0
 
-def get_server_respone(host_name, request_data):
+def get_server_response(host_name, request_data):
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.connect((host_name, 80))
     server_socket.sendall(request_data)
-    
-    # Get the response from web server
-    server_respone = server_socket.recv(1024)
 
-    # Get the header of the request
-    chunked_encoding = False
-    header_end = server_respone.find(b"\r\n\r\n")
-    headers = server_respone[:header_end]
-    
-    # If the response is error code, return 403 Forbidden
-    if get_status(server_respone) in error_codes:
+    # Get the response from the web server
+    server_response = b''
+    while True:
+        response_chunk = server_socket.recv(1024)
+        server_response += response_chunk
+        if b'\r\n\r\n' in server_response:
+            break
+
+    # Check for HTTP status code 100 Continue
+    while b'HTTP/1.1 100 Continue\r\n' in server_response:
+        # Send the request data again until you receive a non-100 response
+        server_response = b''
+        server_socket.sendall(request_data)
+        while True:
+            response_chunk = server_socket.recv(1024)
+            server_response += response_chunk
+            if b'\r\n\r\n' in server_response:
+                break
+
+    # Get the header of the response
+    header_end = server_response.find(b"\r\n\r\n")
+    headers = server_response[:header_end]
+
+    # If the response is an error code, return 403 Forbidden
+    if get_status(server_response) in error_codes:
         return response403()
-    
-    # If the response is "connection: close", get the response until the end of the response (the web server will closed eventually)
+
+    # If the response is "connection: close", get the response until the end of the response (the web server will close eventually)
     if get_connection_close(headers):
         while True:
             data_chunk = server_socket.recv(1024)
-            if (data_chunk):
-                server_respone += data_chunk
+            if data_chunk:
+                server_response += data_chunk
             else:
-                return server_respone
+                return server_response
 
     # If the response is not "connection: close" and the body part is not empty, get the response by following the content length or chunked encoding
-    if header_end + 4 != len(server_respone):    
+    if header_end + 4 != len(server_response):
         chunked_encoding = "transfer-encoding: chunked" in headers.decode().lower()
         content_length = get_content_length(headers)
         # If the response is not chunked encoding, get the response by content length
         if not chunked_encoding and content_length > 0:
-            if len(server_respone) < header_end + 4 + content_length:
-                length = content_length - (len(server_respone) - header_end - 4)
-                while len(server_respone) < header_end + content_length + 4:
-                    server_respone += server_socket.recv(length)
+            if len(server_response) < header_end + 4 + content_length:
+                length = content_length - (len(server_response) - header_end - 4)
+                while len(server_response) < header_end + content_length + 4:
+                    server_response += server_socket.recv(length)
         else:  # If the response is chunked encoding, get the response until meet '0' in the body part
             end_check = b'0'
-            chunked_part = server_respone.split(b"\r\n\r\n")[1]
+            chunked_part = server_response.split(b"\r\n\r\n")[1]
             chunks = chunked_part.split(b"\r\n")
             if end_check not in chunks:
                 while True:
                     data_chunk = server_socket.recv(1024)
-                    server_respone += data_chunk
+                    server_response += data_chunk
                     data_chunks = data_chunk.split(b"\r\n")
                     if end_check in data_chunks:
                         break
-    
+
     server_socket.close()
-    return server_respone
+    return server_response
+
 
 def extract_response_content(server_response):
     header_end = server_response.find(b"\r\n\r\n")
@@ -212,9 +228,26 @@ def proxy_thread(client_socket, config):
         CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, START_TIME, END_TIME = config
         request_data = client_socket.recv(4096)
         method, url, host_name = handle_request(request_data)
-        request_lines = request_data.decode().strip().split('\r\n')
+        request_text = request_data.decode()  # Decode the request_data to a string
+        request_lines = request_text.strip().split('\r\n')
+        
+        mutable_request_data = bytearray(request_data)
+        # Find the index of the start of the Cache-Control header
+        cache_control_start = mutable_request_data.find(b'Cache-Control: ')
 
-        print(request_data.decode())
+        if cache_control_start != -1:
+            # Find the end of the Cache-Control header
+            cache_control_end = mutable_request_data.find(b'\r\n', cache_control_start)
+            
+            if cache_control_end != -1:
+                # Replace the old Cache-Control value with the new value
+                new_cache_control = b'Cache-Control: no-store'
+                mutable_request_data[cache_control_start:cache_control_end] = new_cache_control
+
+        # Convert the modified bytearray back to bytes if needed
+        modified_request_data = bytes(mutable_request_data)
+            
+        print(mutable_request_data.decode())
         if len(request_lines) > 0 or request_lines != ['']:
             print("========================================================================================")
 
@@ -228,19 +261,22 @@ def proxy_thread(client_socket, config):
         elif url.startswith('https://'):
             url = url[8:]
 
+        response = get_server_response(host_name, modified_request_data)
+
         if is_image(url):
             cached_data = get_image_from_cache(url, CACHE_DIR, CACHE_TIME)
+            if is_image(url) and get_status(response) == b'200':
+                save_image_to_cache(url, extract_response_content(response), CACHE_DIR)
             if cached_data:
-                response = 'HTTP/1.1 200 OK\r\n\r\n'
-                client_socket.sendall(response.decode())
+                header = b'HTTP/1.1 200 OK\r\n\r\n'
+                client_socket.sendall(header)
                 client_socket.sendall(cached_data)
-                client_socket.close()
-                return
-
-        response = get_server_respone(host_name, request_data)
-
-        if is_image(url) and get_status(response) == b'200':
-            save_image_to_cache(url, extract_response_content(response), CACHE_DIR)
+            else:
+                header = b"HTTP/1.1 200 OK\r\nCache-Control: no-store\r\n\r\n"
+                client_socket.sendall(header)
+                client_socket.sendall(extract_response_content(response))
+            client_socket.close()
+            return
         client_socket.sendall(response)
         client_socket.close()
 
