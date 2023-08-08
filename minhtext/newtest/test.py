@@ -194,7 +194,7 @@ def get_server_response(host_name, request_data):
                 return server_response
 
     # If the response is not "connection: close" and the body part is not empty, get the response by following the content length or chunked encoding
-    if header_end + 4 != len(server_response):
+    else:
         chunked_encoding = "transfer-encoding: chunked" in headers.decode().lower()
         content_length = get_content_length(headers)
         # If the response is not chunked encoding, get the response by content length
