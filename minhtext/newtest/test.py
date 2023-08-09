@@ -156,7 +156,7 @@ def get_server_response(host_name, request_data):
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.connect((host_name, 80))
     server_socket.sendall(request_data)
-
+    print('open')
     # Get the response from the web server
     server_response = b''
     while True:
@@ -179,11 +179,18 @@ def get_server_response(host_name, request_data):
     # Get the header of the response
     header_end = server_response.find(b"\r\n\r\n")
     headers = server_response[:header_end]
-
+    #print("========================================================================================")
+    #print(headers.decode())
+    if (b'HEAD' in request_data):
+        print('is head method')
+        server_socket.close()
+        return headers
+    
+    
     # If the response is an error code, return 403 Forbidden
     if get_status(server_response) in error_codes:
         return response403()
-
+    
     # If the response is "connection: close", get the response until the end of the response (the web server will close eventually)
     if get_connection_close(headers):
         while True:
@@ -195,6 +202,7 @@ def get_server_response(host_name, request_data):
 
     # If the response is not "connection: close" and the body part is not empty, get the response by following the content length or chunked encoding
     else:
+        
         chunked_encoding = "transfer-encoding: chunked" in headers.decode().lower()
         content_length = get_content_length(headers)
         # If the response is not chunked encoding, get the response by content length
@@ -230,26 +238,10 @@ def proxy_thread(client_socket, config):
         method, url, host_name = handle_request(request_data)
         request_text = request_data.decode()  # Decode the request_data to a string
         request_lines = request_text.strip().split('\r\n')
-        
-        mutable_request_data = bytearray(request_data)
-        # Find the index of the start of the Cache-Control header
-        cache_control_start = mutable_request_data.find(b'Cache-Control: ')
 
-        if cache_control_start != -1:
-            # Find the end of the Cache-Control header
-            cache_control_end = mutable_request_data.find(b'\r\n', cache_control_start)
-            
-            if cache_control_end != -1:
-                # Replace the old Cache-Control value with the new value
-                new_cache_control = b'Cache-Control: no-store'
-                mutable_request_data[cache_control_start:cache_control_end] = new_cache_control
-
-        # Convert the modified bytearray back to bytes if needed
-        modified_request_data = bytes(mutable_request_data)
-            
-        print(mutable_request_data.decode())
         if len(request_lines) > 0 or request_lines != ['']:
             print("========================================================================================")
+        print(request_data.decode())
 
         if method not in ['GET', 'POST', 'HEAD'] or not check_ACCESS_LIMIT(START_TIME, END_TIME) or not is_whitelisted(url, WHITELISTING):
             client_socket.sendall(response403())
@@ -261,7 +253,7 @@ def proxy_thread(client_socket, config):
         elif url.startswith('https://'):
             url = url[8:]
 
-        response = get_server_response(host_name, modified_request_data)
+        response = get_server_response(host_name, request_data)
 
         if is_image(url):
             cached_data = get_image_from_cache(url, CACHE_DIR, CACHE_TIME)
@@ -278,8 +270,9 @@ def proxy_thread(client_socket, config):
             client_socket.close()
             return
         client_socket.sendall(response)
+        
         client_socket.close()
-
+        
     except OSError:
         client_socket.close()
 
