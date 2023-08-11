@@ -3,9 +3,7 @@ import socket
 import time
 import threading
 import argparse
-import shutil
 
-# Kiểm tra code gửi về có nằm trong danh sách cấm hay không
 error_codes = [b'400', b'401', b'403', b'404', b'405', b'408', b'502', b'503']
 
 # Function to read the config file manually
@@ -82,66 +80,55 @@ def is_cache_expired(filename, CACHE_TIME):
     return cache_age > CACHE_TIME
 
 # Hàm lưu ảnh vào cache và ghi lại thời điểm lưu cache
-def save_image_to_cache(url, referer, data, CACHE_DIR):
-    directory_root = os.path.join(CACHE_DIR, referer.replace('/', ''))
-    os.makedirs(directory_root, exist_ok=True)
-    # 
-    url = url.replace('/', '_').replace(':', '_')
-    directory_root_sub = os.path.join(directory_root, url)
-    os.makedirs(directory_root_sub, exist_ok=True)
-    # 
-    filename = url
-    cache_time_filename = filename + '.time'
-    # 
-    path_to_filename = os.path.join(directory_root_sub, filename)
-    path_to_filename_cache = os.path.join(directory_root_sub, cache_time_filename)
-    with open(path_to_filename, 'wb') as f:
+def save_image_to_cache(url, data, CACHE_DIR):
+    filename = os.path.join(CACHE_DIR, url.replace('/', '_').replace(':', '_'))
+    with open(filename, 'wb') as f:
         f.write(data)
-    with open(path_to_filename_cache, 'w') as f_time:
+    with open(filename + '.time', 'w') as f_time:
         f_time.write(str(time.time()))
 
 # Hàm lấy dữ liệu ảnh từ cache và kiểm tra thời gian cache
-def get_image_from_cache(url, referer, CACHE_DIR, CACHE_TIME):
-    directory_root = os.path.join(CACHE_DIR, referer.replace('/', ''))
-    # 
-    url = url.replace('/', '_').replace(':', '_')
-    directory_root_sub = os.path.join(directory_root, url)
-    # 
-    filename = url
+def get_image_from_cache(url, CACHE_DIR, CACHE_TIME):
+    filename = os.path.join(CACHE_DIR, url.replace('/', '_').replace(':', '_'))
     cache_time_filename = filename + '.time'
-    # 
-    path_to_filename = os.path.join(directory_root_sub, filename)
-    path_to_filename_cache = os.path.join(directory_root_sub, cache_time_filename)
-    if os.path.exists(path_to_filename) and os.path.exists(path_to_filename_cache):
-        if not is_cache_expired(path_to_filename_cache, CACHE_TIME):
-            with open(path_to_filename, 'rb') as f:
+    if os.path.exists(filename) and os.path.exists(cache_time_filename):
+        if not is_cache_expired(cache_time_filename, CACHE_TIME):
+            with open(filename, 'rb') as f:
                 return f.read()
         else:
-            os.rmdir(directory_root)
+            # Xóa cache và cache time nếu đã hết hạn
+            os.remove(filename)
+            os.remove(cache_time_filename)
     return None
 
-# Luồng thực hiện việc loại bỏ các đối tượng đã hết hạn khỏi cache
+# Luồng thực hiện việc loại bỏ các đối tượng đã hết hạn khỏi cache sau mỗi 15 phút
 def remove_expired_cache(CACHE_DIR, CACHE_TIME):
     while True:
+        time.sleep(CACHE_TIME) 
         current_time = time.time()
-        for root, dirs, files in os.walk(CACHE_DIR):
-            for filename in files:
-                if filename.endswith('.time'):
-                    cache_time_filename = os.path.join(root, filename)
-                    with open(cache_time_filename, 'r') as f_time:
-                        cache_time = float(f_time.read())
-                    cache_age = current_time - cache_time
-                    if cache_age > CACHE_TIME:
-                        parent_directory = os.path.dirname(root)
-                        shutil.rmtree(parent_directory) 
-        time.sleep(CACHE_TIME)
+        for filename in os.listdir(CACHE_DIR):
+            if filename.endswith('.time'):
+                cache_time_filename = os.path.join(CACHE_DIR, filename)
+                with open(cache_time_filename, 'r') as f_time:
+                    cache_time = float(f_time.read())
+                cache_age = current_time - cache_time
+                if cache_age > CACHE_TIME:
+                    # Xóa cache và cache time nếu đã hết hạn
+                    cache_filename = os.path.join(CACHE_DIR, filename[:-5])
+                    os.remove(cache_filename)
+                    os.remove(cache_time_filename)
 
 # Biến lưu trữ logs truy cập
 access_logs = {}
 
 # Kiểm tra xem URL có phải là một hình ảnh không
 def is_image(url):
-    return any(url.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp'])
+    image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp']
+    for extension in image_extensions:
+        if extension in url.lower():
+            return True
+    return False
+
 
 # Xử lí chuỗi request
 def handle_request(request_data):
@@ -169,21 +156,15 @@ def get_content_length(headers):
             return length
     return 0
 
-def get_referer(headers):
-    line = headers.split(b"\r\n")
-    for l in line:
-        if l.startswith(b"Referer:"):
-            referer = l.split(b":")[2].strip()
-            return referer.decode()
-
 def get_server_response(host_name, request_data):
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.connect((host_name, 80))
     server_socket.sendall(request_data)
+    print('open')
     # Get the response from the web server
     server_response = b''
     while True:
-        response_chunk = server_socket.recv(1024)
+        response_chunk = server_socket.recv(1)
         server_response += response_chunk
         if b'\r\n\r\n' in server_response:
             break
@@ -194,7 +175,7 @@ def get_server_response(host_name, request_data):
         server_response = b''
         server_socket.sendall(request_data)
         while True:
-            response_chunk = server_socket.recv(1024)
+            response_chunk = server_socket.recv(1)
             server_response += response_chunk
             if b'\r\n\r\n' in server_response:
                 break
@@ -202,7 +183,10 @@ def get_server_response(host_name, request_data):
     # Get the header of the response
     header_end = server_response.find(b"\r\n\r\n")
     headers = server_response[:header_end]
+    #print("========================================================================================")
+    #print(headers.decode())
     if (b'HEAD' in request_data):
+        print('is head method')
         server_socket.close()
         return headers
     
@@ -246,6 +230,7 @@ def get_server_response(host_name, request_data):
     server_socket.close()
     return server_response
 
+
 def extract_response_content(server_response):
     header_end = server_response.find(b"\r\n\r\n")
     return server_response[header_end + 4:]
@@ -255,13 +240,12 @@ def proxy_thread(client_socket, config):
         CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, START_TIME, END_TIME = config
         request_data = client_socket.recv(4096)
         method, url, host_name = handle_request(request_data)
-        request_text = request_data.decode()  
+        request_text = request_data.decode()  # Decode the request_data to a string
         request_lines = request_text.strip().split('\r\n')
 
         if len(request_lines) > 0 or request_lines != ['']:
             print("========================================================================================")
         print(request_data.decode())
-        referer = get_referer(request_data)
 
         if method not in ['GET', 'POST', 'HEAD'] or not check_ACCESS_LIMIT(START_TIME, END_TIME) or not is_whitelisted(url, WHITELISTING):
             client_socket.sendall(response403())
@@ -272,26 +256,30 @@ def proxy_thread(client_socket, config):
             url = url[7:]
         elif url.startswith('https://'):
             url = url[8:]
-        if url.endswith('/'):
-            url = url[:-1]
 
         response = get_server_response(host_name, request_data)
-        
+
         if is_image(url):
-            cached_data = get_image_from_cache(url, referer, CACHE_DIR, CACHE_TIME)
+            cached_data = get_image_from_cache(url, CACHE_DIR, CACHE_TIME)
+            if is_image(url) and get_status(response) == b'200':
+                save_image_to_cache(url, extract_response_content(response), CACHE_DIR)
             if cached_data:
-                header = b'HTTP/1.1 200 OK\r\nCache-Control: no-store\r\n\r\n'
+                header = b'HTTP/1.1 200 OK\r\n\r\n'
                 client_socket.sendall(header)
                 client_socket.sendall(cached_data)
-            elif is_image(url) and get_status(response) == b'200':
-                save_image_to_cache(url, referer, extract_response_content(response), CACHE_DIR)
+            else:
+                header = b"HTTP/1.1 200 OK\r\nCache-Control: no-store\r\n\r\n"
+                client_socket.sendall(header)
+                client_socket.sendall(extract_response_content(response))
             client_socket.close()
             return
         client_socket.sendall(response)
+        
         client_socket.close()
         
     except OSError:
         client_socket.close()
+
 
 def main(config_file):
     config = read_config(config_file)
