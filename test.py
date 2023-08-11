@@ -80,9 +80,19 @@ def is_cache_expired(filename, CACHE_TIME):
     return cache_age > CACHE_TIME
 
 # Hàm lưu ảnh vào cache và ghi lại thời điểm lưu cache
-def save_image_to_cache(url, data, CACHE_DIR):
+def process_filename(url,CACHE_DIR):
     filename = os.path.join(CACHE_DIR, url.replace('/', '_').replace(':', '_').replace('?','_'))
+    image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp']
+    for extension in image_extensions:
+        if extension in url.lower():
+            pos = filename.find(extension)
+            filename = filename[:pos+len(extension)]
+            return filename
+    return filename
     
+def save_image_to_cache(url, data, CACHE_DIR):
+    filename = process_filename(url,CACHE_DIR)
+    print(filename)
     with open(filename, 'wb') as f:
         f.write(data)
     with open(filename + '.time', 'w') as f_time:
@@ -90,7 +100,7 @@ def save_image_to_cache(url, data, CACHE_DIR):
 
 # Hàm lấy dữ liệu ảnh từ cache và kiểm tra thời gian cache
 def get_image_from_cache(url, CACHE_DIR, CACHE_TIME):
-    filename = os.path.join(CACHE_DIR, url.replace('/', '_').replace(':', '_'))
+    filename = process_filename(url,CACHE_DIR)
     cache_time_filename = filename + '.time'
     if os.path.exists(filename) and os.path.exists(cache_time_filename):
         if not is_cache_expired(cache_time_filename, CACHE_TIME):
@@ -161,7 +171,6 @@ def get_server_response(host_name, request_data):
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.connect((host_name, 80))
     server_socket.sendall(request_data)
-    print('open')
     # Get the response from the web server
     server_response = b''
     while True:
@@ -190,12 +199,9 @@ def get_server_response(host_name, request_data):
         print('is head method')
         server_socket.close()
         return headers
-    
-    
     # If the response is an error code, return 403 Forbidden
     if get_status(server_response) in error_codes:
         return response403()
-    
     # If the response is "connection: close", get the response until the end of the response (the web server will close eventually)
     if get_connection_close(headers):
         while True:
@@ -234,7 +240,32 @@ def get_server_response(host_name, request_data):
 
 def extract_response_content(server_response):
     header_end = server_response.find(b"\r\n\r\n")
-    return server_response[header_end + 4:]
+    headers = server_response[:header_end]
+    chunked_encoding = "transfer-encoding: chunked" in headers.decode().lower()
+    body = server_response[header_end + 4:]
+    if (chunked_encoding):
+        buffer = b""  # Initialize the buffer to store complete data
+        while body:
+            # Find the position of the chunk size separator "\r\n"
+            separator_pos = body.find(b"\r\n")
+            if separator_pos == -1:
+                break
+            chunk_size_hex = body[:separator_pos].decode()  # Read chunk size in hexadecimal
+            chunk_size = int(chunk_size_hex, 16)
+            
+            # Find the position of the end of chunk
+            end_chunk_pos = separator_pos + 2 + chunk_size + 2  # Skip "\r\n" before and after chunk data
+            
+            # Extract the chunk data and append it to the buffer
+            chunk_data = body[separator_pos + 2:end_chunk_pos]
+            buffer += chunk_data
+            
+            # Remove the processed chunk from the body
+            body = body[end_chunk_pos:]
+
+        # The 'buffer' now contains the complete chunked data
+        return buffer
+    return body
 
 def proxy_thread(client_socket, config):
     try:
