@@ -1,1 +1,0 @@
-python test.py newconfig.txt
