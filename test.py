@@ -81,7 +81,8 @@ def is_cache_expired(filename, CACHE_TIME):
 
 # Hàm lưu ảnh vào cache và ghi lại thời điểm lưu cache
 def save_image_to_cache(url, data, CACHE_DIR):
-    filename = os.path.join(CACHE_DIR, url.replace('/', '_').replace(':', '_'))
+    filename = os.path.join(CACHE_DIR, url.replace('/', '_').replace(':', '_').replace('?','_'))
+    
     with open(filename, 'wb') as f:
         f.write(data)
     with open(filename + '.time', 'w') as f_time:
