@@ -60,6 +60,7 @@ def is_whitelisted(domain, whitelist):
             return True
     return False
 
+# Lỗi 403 custom
 def response403():
     with open("custom403.html", "rb") as html_file:
         content = html_file.read()
@@ -82,11 +83,11 @@ def is_cache_expired(filename, CACHE_TIME):
     return cache_age > CACHE_TIME
 
 # Hàm lưu ảnh vào cache và ghi lại thời điểm lưu cache
-def save_image_to_cache(url, referer, data, CACHE_DIR):
-    directory_root = os.path.join(CACHE_DIR, referer.replace('/', ''))
+def save_image_to_cache(url, host_name, data, CACHE_DIR):
+    directory_root = os.path.join(CACHE_DIR, host_name.replace('/', ''))
     os.makedirs(directory_root, exist_ok=True)
     # 
-    url = url.replace('/', '_').replace(':', '_')
+    # url = url.replace('/', '_').replace(':', '_')
     directory_root_sub = os.path.join(directory_root, url)
     os.makedirs(directory_root_sub, exist_ok=True)
     # 
@@ -101,10 +102,10 @@ def save_image_to_cache(url, referer, data, CACHE_DIR):
         f_time.write(str(time.time()))
 
 # Hàm lấy dữ liệu ảnh từ cache và kiểm tra thời gian cache
-def get_image_from_cache(url, referer, CACHE_DIR, CACHE_TIME):
-    directory_root = os.path.join(CACHE_DIR, referer.replace('/', ''))
+def get_image_from_cache(url, host_name, CACHE_DIR, CACHE_TIME):
+    directory_root = os.path.join(CACHE_DIR, host_name.replace('/', ''))
     # 
-    url = url.replace('/', '_').replace(':', '_')
+    # url = url.replace('/', '_').replace(':', '_')
     directory_root_sub = os.path.join(directory_root, url)
     # 
     filename = url
@@ -136,12 +137,9 @@ def remove_expired_cache(CACHE_DIR, CACHE_TIME):
                         shutil.rmtree(parent_directory) 
         time.sleep(CACHE_TIME)
 
-# Biến lưu trữ logs truy cập
-access_logs = {}
-
-# Kiểm tra xem URL có phải là một hình ảnh không
 def is_image(url):
-    return any(url.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp'])
+    image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp']
+    return any(ext in url for ext in image_extensions)
 
 # Xử lí chuỗi request
 def handle_request(request_data):
@@ -158,9 +156,10 @@ def get_status(server_respone):
     buf = server_respone.split(b'\r\n')[0]
     return buf.split(b' ')[1]
 
-def get_connection_close(server_respone):
+def is_connection_close(server_respone):
     return "connection: close" in server_respone.decode().lower()
-
+def is_chunk(header):
+    return "transfer-encoding: chunked" in header.decode().lower()
 def get_content_length(headers):
     line = headers.split(b"\r\n")
     for l in line:
@@ -168,14 +167,24 @@ def get_content_length(headers):
             length = int(l.split(b":")[1].strip())
             return length
     return 0
-
-def get_referer(headers):
-    line = headers.split(b"\r\n")
-    for l in line:
-        if l.startswith(b"Referer:"):
-            referer = l.split(b":")[2].strip()
-            return referer.decode()
-
+def process_chunk_data_type(body):
+    buffer = b""  
+    while body:		
+        separator_pos = body.find(b"\r\n")	
+        if separator_pos == -1:	
+            break	
+        chunk_size_hex = body[:separator_pos].decode()
+        chunk_size = int(chunk_size_hex, 16)	
+            
+        # Find the position of the end of chunk	
+        end_chunk_pos = separator_pos + 2 + chunk_size + 2  # Skip "\r\n" before and after chunk data	
+        # Extract the chunk data and append it to the buffer	
+        chunk_data = body[separator_pos + 2:end_chunk_pos]	
+        buffer += chunk_data	
+        # Remove the processed chunk from the body	
+        body = body[end_chunk_pos:]	
+    # The 'buffer' now contains the complete chunked data	
+    return buffer	
 def get_server_response(host_name, request_data):
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.connect((host_name, 80))
@@ -212,7 +221,7 @@ def get_server_response(host_name, request_data):
         return response403()
     
     # If the response is "connection: close", get the response until the end of the response (the web server will close eventually)
-    if get_connection_close(headers):
+    if is_connection_close(headers):
         while True:
             data_chunk = server_socket.recv(1024)
             if data_chunk:
@@ -223,45 +232,54 @@ def get_server_response(host_name, request_data):
     # If the response is not "connection: close" and the body part is not empty, get the response by following the content length or chunked encoding
     else:
         
-        chunked_encoding = "transfer-encoding: chunked" in headers.decode().lower()
-        content_length = get_content_length(headers)
-        # If the response is not chunked encoding, get the response by content length
-        if not chunked_encoding and content_length > 0:
+        
+        content_length = get_content_length(headers)    
+        
+        if not is_chunk(headers) and content_length > 0:
+            # If the response is not chunked encoding, get the response by content length
             if len(server_response) < header_end + 4 + content_length:
                 length = content_length - (len(server_response) - header_end - 4)
                 while len(server_response) < header_end + content_length + 4:
                     server_response += server_socket.recv(length)
-        else:  # If the response is chunked encoding, get the response until meet '0' in the body part
-            end_check = b'0'
-            chunked_part = server_response.split(b"\r\n\r\n")[1]
-            chunks = chunked_part.split(b"\r\n")
-            if end_check not in chunks:
-                while True:
-                    data_chunk = server_socket.recv(1024)
-                    server_response += data_chunk
-                    data_chunks = data_chunk.split(b"\r\n")
-                    if end_check in data_chunks:
-                        break
+        else:
+            # If the response is chunked encoding, get the response until meet '0' in the body part
+            while True:
+                data = server_socket.recv(1024)
+                server_response += data 
+                if b'\r\n0\r\n' in data:
+                    break
 
     server_socket.close()
     return server_response
 
-def extract_response_content(server_response):
-    header_end = server_response.find(b"\r\n\r\n")
-    return server_response[header_end + 4:]
+def extract_response_content(server_response):	
+    header_end = server_response.find(b"\r\n\r\n")	
+    headers = server_response[:header_end]	
+    chunked_encoding = "transfer-encoding: chunked" in headers.decode().lower()	
+    body = server_response[header_end + 4:]	
+    if (chunked_encoding):	
+        return process_chunk_data_type(body)
+    return body
+
+def extract_image_url(url):
+    supported_formats = ['.jpg', '.jpeg', '.png', '.gif', '.bmp']
+    for ext in supported_formats:
+        ext_pos = url.find(ext)
+        if ext_pos != -1:
+            image_url = url[:ext_pos + len(ext)]
+            path_end = image_url.rfind('/')
+            if path_end != -1:
+                image_url = image_url[path_end + 1:]
+            return image_url
 
 def proxy_thread(client_socket, config):
     try:
         CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, START_TIME, END_TIME = config
         request_data = client_socket.recv(4096)
         method, url, host_name = handle_request(request_data)
-        request_text = request_data.decode()  
-        request_lines = request_text.strip().split('\r\n')
-
-        if len(request_lines) > 0 or request_lines != ['']:
-            print("========================================================================================")
+        
+        print("========================================================================================")
         print(request_data.decode())
-        referer = get_referer(request_data)
 
         if method not in ['GET', 'POST', 'HEAD'] or not check_ACCESS_LIMIT(START_TIME, END_TIME) or not is_whitelisted(url, WHITELISTING):
             client_socket.sendall(response403())
@@ -278,13 +296,17 @@ def proxy_thread(client_socket, config):
         response = get_server_response(host_name, request_data)
         
         if is_image(url):
-            cached_data = get_image_from_cache(url, referer, CACHE_DIR, CACHE_TIME)
+            cached_data = get_image_from_cache(extract_image_url(url), host_name, CACHE_DIR, CACHE_TIME)
+            if get_status(response) == b'200':
+                save_image_to_cache(extract_image_url(url), host_name, extract_response_content(response), CACHE_DIR)
             if cached_data:
-                header = b'HTTP/1.1 200 OK\r\nCache-Control: no-store\r\n\r\n'
+                header = b'HTTP/1.1 200 OK\r\n\r\n'
                 client_socket.sendall(header)
                 client_socket.sendall(cached_data)
-            elif is_image(url) and get_status(response) == b'200':
-                save_image_to_cache(url, referer, extract_response_content(response), CACHE_DIR)
+            else:
+                header = b"HTTP/1.1 200 OK\r\nCache-Control: no-store\r\n\r\n"
+                client_socket.sendall(header)
+                client_socket.sendall(extract_response_content(response))
             client_socket.close()
             return
         client_socket.sendall(response)

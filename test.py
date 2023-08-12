@@ -210,7 +210,6 @@ def get_server_response(host_name, request_data):
                 server_response += data_chunk
             else:
                 return server_response
-
     # If the response is not "connection: close" and the body part is not empty, get the response by following the content length or chunked encoding
     else:
         
@@ -264,19 +263,16 @@ def extract_response_content(server_response):
             body = body[end_chunk_pos:]
 
         # The 'buffer' now contains the complete chunked data
-        return buffer
-    return body
+        return headers, buffer
+    return headers,body
 
 def proxy_thread(client_socket, config):
     try:
         CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, START_TIME, END_TIME = config
         request_data = client_socket.recv(4096)
         method, url, host_name = handle_request(request_data)
-        request_text = request_data.decode()  # Decode the request_data to a string
-        request_lines = request_text.strip().split('\r\n')
-
-        if len(request_lines) > 0 or request_lines != ['']:
-            print("========================================================================================")
+        
+        print("========================================================================================")
         print(request_data.decode())
 
         if method not in ['GET', 'POST', 'HEAD'] or not check_ACCESS_LIMIT(START_TIME, END_TIME) or not is_whitelisted(url, WHITELISTING):
@@ -290,11 +286,16 @@ def proxy_thread(client_socket, config):
             url = url[8:]
 
         response = get_server_response(host_name, request_data)
-
+        headers, body = extract_response_content(response)
+        # print(headers)
+        if ("connection: close" in request_data.decode().lower()):
+            print('is the end of the respond')
+        # elif ("connection: keep-alive" in request_data.decode().lower()):
+        #     print('im alive')
         if is_image(url):
             cached_data = get_image_from_cache(url, CACHE_DIR, CACHE_TIME)
             if is_image(url) and get_status(response) == b'200':
-                save_image_to_cache(url, extract_response_content(response), CACHE_DIR)
+                save_image_to_cache(url, body, CACHE_DIR)
             if cached_data:
                 header = b'HTTP/1.1 200 OK\r\n\r\n'
                 client_socket.sendall(header)
@@ -302,7 +303,7 @@ def proxy_thread(client_socket, config):
             else:
                 header = b"HTTP/1.1 200 OK\r\nCache-Control: no-store\r\n\r\n"
                 client_socket.sendall(header)
-                client_socket.sendall(extract_response_content(response))
+                client_socket.sendall(body)
             client_socket.close()
             return
         client_socket.sendall(response)
