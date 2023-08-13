@@ -137,6 +137,9 @@ def remove_expired_cache(CACHE_DIR, CACHE_TIME):
                         shutil.rmtree(parent_directory) 
         time.sleep(CACHE_TIME)
 
+# Biến lưu trữ logs truy cập
+access_logs = {}
+
 def is_image(url):
     image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp']
     return any(ext in url for ext in image_extensions)
@@ -156,10 +159,9 @@ def get_status(server_respone):
     buf = server_respone.split(b'\r\n')[0]
     return buf.split(b' ')[1]
 
-def is_connection_close(server_respone):
+def get_connection_close(server_respone):
     return "connection: close" in server_respone.decode().lower()
-def is_chunk(header):
-    return "transfer-encoding: chunked" in header.decode().lower()
+
 def get_content_length(headers):
     line = headers.split(b"\r\n")
     for l in line:
@@ -167,24 +169,7 @@ def get_content_length(headers):
             length = int(l.split(b":")[1].strip())
             return length
     return 0
-def process_chunk_data_type(body):
-    buffer = b""  
-    while body:		
-        separator_pos = body.find(b"\r\n")	
-        if separator_pos == -1:	
-            break	
-        chunk_size_hex = body[:separator_pos].decode()
-        chunk_size = int(chunk_size_hex, 16)	
-            
-        # Find the position of the end of chunk	
-        end_chunk_pos = separator_pos + 2 + chunk_size + 2  # Skip "\r\n" before and after chunk data	
-        # Extract the chunk data and append it to the buffer	
-        chunk_data = body[separator_pos + 2:end_chunk_pos]	
-        buffer += chunk_data	
-        # Remove the processed chunk from the body	
-        body = body[end_chunk_pos:]	
-    # The 'buffer' now contains the complete chunked data	
-    return buffer	
+
 def get_server_response(host_name, request_data):
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.connect((host_name, 80))
@@ -221,7 +206,7 @@ def get_server_response(host_name, request_data):
         return response403()
     
     # If the response is "connection: close", get the response until the end of the response (the web server will close eventually)
-    if is_connection_close(headers):
+    if get_connection_close(headers):
         while True:
             data_chunk = server_socket.recv(1024)
             if data_chunk:
@@ -232,22 +217,25 @@ def get_server_response(host_name, request_data):
     # If the response is not "connection: close" and the body part is not empty, get the response by following the content length or chunked encoding
     else:
         
-        
-        content_length = get_content_length(headers)    
-        
-        if not is_chunk(headers) and content_length > 0:
-            # If the response is not chunked encoding, get the response by content length
+        chunked_encoding = "transfer-encoding: chunked" in headers.decode().lower()
+        content_length = get_content_length(headers)
+        # If the response is not chunked encoding, get the response by content length
+        if not chunked_encoding and content_length > 0:
             if len(server_response) < header_end + 4 + content_length:
                 length = content_length - (len(server_response) - header_end - 4)
                 while len(server_response) < header_end + content_length + 4:
                     server_response += server_socket.recv(length)
-        else:
-            # If the response is chunked encoding, get the response until meet '0' in the body part
-            while True:
-                data = server_socket.recv(1024)
-                server_response += data 
-                if b'\r\n0\r\n' in data:
-                    break
+        else:  # If the response is chunked encoding, get the response until meet '0' in the body part
+            end_check = b'0'
+            chunked_part = server_response.split(b"\r\n\r\n")[1]
+            chunks = chunked_part.split(b"\r\n")
+            if end_check not in chunks:
+                while True:
+                    data_chunk = server_socket.recv(1024)
+                    server_response += data_chunk
+                    data_chunks = data_chunk.split(b"\r\n")
+                    if end_check in data_chunks:
+                        break
 
     server_socket.close()
     return server_response
@@ -258,7 +246,26 @@ def extract_response_content(server_response):
     chunked_encoding = "transfer-encoding: chunked" in headers.decode().lower()	
     body = server_response[header_end + 4:]	
     if (chunked_encoding):	
-        return process_chunk_data_type(body)
+        buffer = b""  # Initialize the buffer to store complete data	
+        while body:	
+            # Find the position of the chunk size separator "\r\n"	
+            separator_pos = body.find(b"\r\n")	
+            if separator_pos == -1:	
+                break	
+            chunk_size_hex = body[:separator_pos].decode()  # Read chunk size in hexadecimal	
+            chunk_size = int(chunk_size_hex, 16)	
+            	
+            # Find the position of the end of chunk	
+            end_chunk_pos = separator_pos + 2 + chunk_size + 2  # Skip "\r\n" before and after chunk data	
+            	
+            # Extract the chunk data and append it to the buffer	
+            chunk_data = body[separator_pos + 2:end_chunk_pos]	
+            buffer += chunk_data	
+            	
+            # Remove the processed chunk from the body	
+            body = body[end_chunk_pos:]	
+        # The 'buffer' now contains the complete chunked data	
+        return buffer	
     return body
 
 def extract_image_url(url):
@@ -277,8 +284,11 @@ def proxy_thread(client_socket, config):
         CACHE_DIR, ACCESS_LIMIT, SERVER_IP, SERVER_PORT, CACHE_TIME, WHITELISTING, START_TIME, END_TIME = config
         request_data = client_socket.recv(4096)
         method, url, host_name = handle_request(request_data)
-        
-        print("========================================================================================")
+        request_text = request_data.decode()  
+        request_lines = request_text.strip().split('\r\n')
+
+        if len(request_lines) > 0 or request_lines != ['']:
+            print("========================================================================================")
         print(request_data.decode())
 
         if method not in ['GET', 'POST', 'HEAD'] or not check_ACCESS_LIMIT(START_TIME, END_TIME) or not is_whitelisted(url, WHITELISTING):
